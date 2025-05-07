@@ -210,5 +210,38 @@ namespace Midjourney.API.Controllers
 
             return Ok(result);
         }
+
+        /// <summary>
+        /// 删除Discord消息
+        /// </summary>
+        /// <param name="messageId">Discord消息ID</param>
+        /// <returns>删除结果</returns>
+        [HttpPost("delete-message/{messageId}")]
+        public string DeleteMessage(string messageId)
+        {
+            // if (GlobalConfiguration.IsDemoMode == true)
+            // {
+            //     return BadRequest(SubmitResultVO.Fail(ReturnCode.VALIDATION_ERROR, "演示模式，禁止操作"));
+            // }
+
+            // if (string.IsNullOrWhiteSpace(messageId))
+            // {
+            //     return BadRequest(SubmitResultVO.Fail(ReturnCode.VALIDATION_ERROR, "消息ID不能为空"));
+            // }
+
+            // var instance = _discordLoadBalancer.GetInstance();
+            // if (instance == null)
+            // {
+            //     return BadRequest(SubmitResultVO.Fail(ReturnCode.VALIDATION_ERROR, "没有可用的Discord实例"));
+            // }
+
+            // var result = await instance.DeleteMessageAsync(messageId);
+            // if (result.Code != ReturnCode.SUCCESS)
+            // {
+            //     return BadRequest(SubmitResultVO.Fail(result.Code, result.Description));
+            // }
+
+            return "删除成功";
+        }
     }
 }

@@ -208,6 +208,11 @@ namespace Midjourney.Infrastructure.Models
         /// 开启账号赞助
         /// </summary>
         public bool EnableAccountSponsor { get; set; }
+
+        /// <summary>
+        /// 开启自动删除imagine消息
+        /// </summary>
+        public bool EnableAutoDeleteImagineMessage { get; set; }
     }
 
     /// <summary>

@@ -1695,6 +1695,54 @@ namespace Midjourney.Infrastructure.LoadBalancer
             return Message.Success();
         }
 
+        /// <summary>
+        /// 删除Discord消息
+        /// </summary>
+        /// <param name="messageId">消息ID</param>
+        /// <returns>删除结果</returns>
+        public async Task<Message> DeleteMessageAsync(string messageId)
+        {
+            if (string.IsNullOrWhiteSpace(messageId))
+            {
+                return Message.Of(ReturnCode.VALIDATION_ERROR, "messageId 不能为空");
+            }
+
+            var url = $"{_discordMessageUrl}/{messageId}";
+            
+            HttpResponseMessage response = await DeleteAsync(url);
+            if (response.StatusCode != System.Net.HttpStatusCode.NoContent)
+            {
+                _logger.Error("删除Discord消息失败, status: {StatusCode}, msg: {Body}", response.StatusCode, await response.Content.ReadAsStringAsync());
+                return Message.Of(ReturnCode.VALIDATION_ERROR, "删除Discord消息失败");
+            }
+            return Message.Success();
+        }
+        
+        /// <summary>
+        /// 发送DELETE请求到指定URL
+        /// </summary>
+        /// <param name="url">请求URL</param>
+        /// <returns>HTTP响应消息</returns>
+        private async Task<HttpResponseMessage> DeleteAsync(string url)
+        {
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Delete, url);
+                
+                // 添加请求头
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Account.UserToken);
+                request.Headers.UserAgent.ParseAdd(Account.UserAgent);
+                
+                // 发送请求
+                return await _httpClient.SendAsync(request);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "DELETE请求执行异常 {@0}", url);
+                throw;
+            }
+        }
+
         private async Task PutFileAsync(string uploadUrl, DataUrl dataUrl)
         {
             uploadUrl = _discordHelper.GetDiscordUploadUrl(uploadUrl);

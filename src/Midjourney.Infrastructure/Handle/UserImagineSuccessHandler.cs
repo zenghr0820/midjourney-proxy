@@ -23,6 +23,7 @@
 // Violation of these terms may result in termination of the license and may subject the violator to legal action.
 using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.LoadBalancer;
+using Midjourney.Infrastructure.Models;
 using Midjourney.Infrastructure.Util;
 
 namespace Midjourney.Infrastructure.Handle
@@ -45,6 +46,14 @@ namespace Midjourney.Infrastructure.Handle
             if (messageType == MessageType.CREATE && parseData != null && HasImage(message))
             {
                 FindAndFinishImageTask(instance, TaskAction.IMAGINE, parseData.Prompt, message);
+                
+                // 检查是否启用了自动删除imagine消息功能
+                var setting = GlobalConfiguration.Setting;
+                if (setting?.EnableAutoDeleteImagineMessage == true && message?.Id != null)
+                {
+                    // 异步删除消息，不等待结果
+                    _ = instance.DeleteMessageAsync(message.Id);
+                }
             }
         }
     }
