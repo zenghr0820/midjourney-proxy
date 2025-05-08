@@ -1,26 +1,4 @@
-﻿// Midjourney Proxy - Proxy for Midjourney's Discord, enabling AI drawings via API with one-click face swap. A free, non-profit drawing API project.
-// Copyright (C) 2024 trueai.org
-
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
-// Additional Terms:
-// This software shall not be used for any illegal activities. 
-// Users must comply with all applicable laws and regulations,
-// particularly those related to image and video processing. 
-// The use of this software for any form of illegal face swapping,
-// invasion of privacy, or any other unlawful purposes is strictly prohibited. 
-// Violation of these terms may result in termination of the license and may subject the violator to legal action.
+﻿
 
 using Midjourney.Infrastructure.Util;
 using MongoDB.Driver;
@@ -137,34 +115,10 @@ namespace Midjourney.Infrastructure.Data
                                 coll.EnsureIndex(c => c.UserId);
                                 coll.EnsureIndex(c => c.ClientIp);
                                 coll.EnsureIndex(c => c.InstanceId);
-
-                                //coll.DropIndex("PromptEn");
-                                //coll.DropIndex("Prompt");
-                                //coll.DropIndex("Description");
-                                //coll.DropIndex("ImageUrl");
-
-                                //coll.EnsureIndex("PromptEn", "PromptEn");
-                                //coll.EnsureIndex("Prompt", "Prompt");
-                                //coll.EnsureIndex("Description", "Description");
-                                //coll.EnsureIndex("ImageUrl", "ImageUrl");
                             }
                             break;
                         case DatabaseType.MongoDB:
                             {
-                                // 不能固定大小，因为无法修改数据
-                                //var database = MongoHelper.Instance;
-                                //var collectionName = "task";
-                                //var collectionExists = database.ListCollectionNames().ToList().Contains(collectionName);
-                                //if (!collectionExists)
-                                //{
-                                //    var options = new CreateCollectionOptions
-                                //    {
-                                //        Capped = true,
-                                //        MaxSize = 1024L * 1024L * 1024L * 1024L,  // 1 TB 的集合大小，实际上不受大小限制
-                                //        MaxDocuments = 1000000
-                                //    };
-                                //    database.CreateCollection("task", options);
-                                //}
 
                                 var coll = MongoHelper.GetCollection<TaskInfo>();
 

@@ -1,26 +1,4 @@
-// Midjourney Proxy - Proxy for Midjourney's Discord, enabling AI drawings via API with one-click face swap. A free, non-profit drawing API project.
-// Copyright (C) 2024 trueai.org
 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
-// Additional Terms:
-// This software shall not be used for any illegal activities. 
-// Users must comply with all applicable laws and regulations,
-// particularly those related to image and video processing. 
-// The use of this software for any form of illegal face swapping,
-// invasion of privacy, or any other unlawful purposes is strictly prohibited. 
-// Violation of these terms may result in termination of the license and may subject the violator to legal action.
 using RestSharp;
 using Serilog;
 using Serilog.Debugging;
@@ -40,7 +18,7 @@ namespace Midjourney.Captcha.API
             var builder = CreateHostBuilder(args).Build();
             var env = builder.Services.GetService<IWebHostEnvironment>();
 
-            // ÅäÖÃ Serilog
+            // ï¿½ï¿½ï¿½ï¿½ Serilog
             var logger = new LoggerConfiguration()
                 .ReadFrom.Configuration(builder.Services.GetService<IConfiguration>());
 
@@ -49,20 +27,20 @@ namespace Midjourney.Captcha.API
                 logger.MinimumLevel.Debug()
                       .Enrich.FromLogContext();
 
-                // Ê¹ÓÃ Serilog.Debugging.SelfLog.Enable(Console.Error) À´ÆôÓÃ Serilog µÄ×ÔÎÒÕï¶Ï£¬Õâ½«°ïÖúÕï¶ÏÅäÖÃÎÊÌâ¡£
+                // Ê¹ï¿½ï¿½ Serilog.Debugging.SelfLog.Enable(Console.Error) ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Serilog ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï£ï¿½ï¿½â½«ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½â¡£
                 SelfLog.Enable(Console.Error);
             }
 
             Log.Logger = logger.CreateLogger();
 
-            // È·±£ÔÚÓ¦ÓÃ³ÌÐò½áÊøÊ±¹Ø±Õ²¢Ë¢ÐÂÈÕÖ¾
+            // È·ï¿½ï¿½ï¿½ï¿½Ó¦ï¿½Ã³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½Ø±Õ²ï¿½Ë¢ï¿½ï¿½ï¿½ï¿½Ö¾
             AppDomain.CurrentDomain.ProcessExit += (s, e) => Log.CloseAndFlush();
 
             try
             {
                 Log.Information($"Current: {Directory.GetCurrentDirectory()}");
 
-                //// Ê¹ÓÃ Serilog
+                //// Ê¹ï¿½ï¿½ Serilog
                 //builder.Host.UseSerilog();
 
                 var app = builder;
@@ -71,7 +49,7 @@ namespace Midjourney.Captcha.API
             }
             catch (Exception ex)
             {
-                Log.Fatal(ex, "Ó¦ÓÃÆô¶¯Ê§°Ü");
+                Log.Fatal(ex, "Ó¦ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½");
             }
             finally
             {

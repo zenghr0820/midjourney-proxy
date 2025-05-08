@@ -1,26 +1,4 @@
-﻿// Midjourney Proxy - Proxy for Midjourney's Discord, enabling AI drawings via API with one-click face swap. A free, non-profit drawing API project.
-// Copyright (C) 2024 trueai.org
 
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
-// Additional Terms:
-// This software shall not be used for any illegal activities.
-// Users must comply with all applicable laws and regulations,
-// particularly those related to image and video processing.
-// The use of this software for any form of illegal face swapping,
-// invasion of privacy, or any other unlawful purposes is strictly prohibited.
-// Violation of these terms may result in termination of the license and may subject the violator to legal action.
 
 using System.Diagnostics;
 using System.Text;
@@ -412,71 +390,38 @@ namespace Midjourney.API
 
             var maxCount = setting.MaxCount;
 
-            // 如果超过 x 条，删除最早插入的数据
-            switch (setting.DatabaseType)
-            {
-                case DatabaseType.NONE:
-                    break;
-                case DatabaseType.LiteDB:
-                    {
-                        var documentCount = DbHelper.Instance.TaskStore.Count();
-                        if (documentCount > maxCount)
-                        {
-                            var documentsToDelete = (int)documentCount - maxCount;
-                            var ids = LiteDBHelper.TaskStore.GetCollection().Query().OrderBy(c => c.SubmitTime)
-                                .Limit(documentsToDelete)
-                                .ToList()
-                                .Select(c => c.Id);
+            var documentCount = DbHelper.Instance.TaskStore.Count();
 
-                            if (ids.Any())
-                            {
-                                LiteDBHelper.TaskStore.GetCollection().DeleteMany(c => ids.Contains(c.Id));
-                            }
-                        }
-                    }
-                    break;
-                case DatabaseType.MongoDB:
+            // 如果超过 x 条，删除最早插入的数据
+            try
+            {
+                if (documentCount > maxCount)
+                {
+                    var documentsToDelete = (int)documentCount - maxCount;
+                    var sq = DbHelper.Instance.TaskStore.StreamQuery();
+                    // 获取需要删除的文档的 ID
+                    var ids = sq
+                        .OrderByIf(true, c => c.SubmitTime)
+                        .Take(documentsToDelete)
+                        .ToList()
+                        .Select(c => c.Id);
+
+                    if (ids.Any())
                     {
-                        var coll = MongoHelper.GetCollection<TaskInfo>();
-                        var documentCount = coll.CountDocuments(Builders<TaskInfo>.Filter.Empty);
-                        if (documentCount > maxCount)
-                        {
-                            var documentsToDelete = documentCount - maxCount;
-                            var ids = coll.Find(c => true).SortBy(c => c.SubmitTime).Limit((int)documentsToDelete).Project(c => c.Id).ToList();
-                            if (ids.Any())
-                            {
-                                coll.DeleteMany(c => ids.Contains(c.Id));
-                            }
-                        }
+                        DbHelper.Instance.TaskStore.Delete(c => ids.Contains(c.Id));
+                        // 打印日志
+                        Log.Logger.Information($"删除 {ids.Count()} 条旧文档记录");
+                        Log.Logger.Information($"删除旧文档记录ID: {@ids}");
                     }
-                    break;
-                case DatabaseType.SQLite:
-                case DatabaseType.MySQL:
-                case DatabaseType.PostgreSQL:
-                case DatabaseType.SQLServer:
-                    {
-                        var freeSql = FreeSqlHelper.FreeSql;
-                        if (freeSql != null)
-                        {
-                            var documentCount = freeSql.Queryable<TaskInfo>().Count();
-                            if (documentCount > maxCount)
-                            {
-                                var documentsToDelete = (int)documentCount - maxCount;
-                                var ids = freeSql.Queryable<TaskInfo>().OrderBy(c => c.SubmitTime)
-                                    .Take(documentsToDelete)
-                                    .ToList()
-                                    .Select(c => c.Id);
-                                if (ids.Any())
-                                {
-                                    freeSql.Delete<TaskInfo>().Where(c => ids.Contains(c.Id)).ExecuteAffrows();
-                                }
-                            }
-                        }
-                    }
-                    break;
-                default:
-                    break;
+                }
             }
+            catch (Exception ex)
+            {
+                // 打印日志
+                Log.Logger.Error(ex, "删除旧文档记录异常");
+            }
+
+
         }
 
         /// <summary>
@@ -878,7 +823,7 @@ namespace Midjourney.API
                     request.AddHeader("authorization", account.UserToken);
 
                     // base64 编码
-                    // "eyJvcyI6IldpbmRvd3MiLCJicm93c2VyIjoiQ2hyb21lIiwiZGV2aWNlIjoiIiwic3lzdGVtX2xvY2FsZSI6InpoLUNOIiwiYnJvd3Nlcl91c2VyX2FnZW50IjoiTW96aWxsYS81LjAgKFdpbmRvd3MgTlQgMTAuMDsgV2luNjQ7IHg2NCkgQXBwbGVXZWJLaXQvNTM3LjM2IChLSFRNTCwgbGlrZSBHZWNrbykgQ2hyb21lLzEyOS4wLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMTI5LjAuMC4wIiwib3NfdmVyc2lvbiI6IjEwIiwicmVmZXJyZXIiOiJodHRwczovL2Rpc2NvcmQuY29tLz9kaXNjb3JkdG9rZW49TVRJM056TXhOVEEyT1RFMU1UQXlNekUzTlEuR1k2U2RpLm9zdl81cVpOcl9xeVdxVDBtTW0tYkJ4RVRXQzgwQzVPbzU4WlJvIiwicmVmZXJyaW5nX2RvbWFpbiI6ImRpc2NvcmQuY29tIiwicmVmZXJyZXJfY3VycmVudCI6IiIsInJlZmVycmluZ19kb21haW5fY3VycmVudCI6IiIsInJlbGVhc2VfY2hhbm5lbCI6InN0YWJsZSIsImNsaWVudF9idWlsZF9udW1iZXIiOjM0Mjk2OCwiY2xpZW50X2V2ZW50X3NvdXJjZSI6bnVsbH0="
+                    // "eyJvcyI6IldpbmRvd3MiLCJicm93c2VyIjoiQ2hyb21lIiwiZGV2aWNlIjoiIiwic3lzdGVtX2xvY2FsZSI6InpoLUNOIiwiYnJvd3Nlcl91c2VyX2FnZW50IjoiTW96aWxsYS81LjAgKFdpbmRvd3MgTlQgMTAuMDsgV2luNjQ7IHg2NCkgQXBwbGVXZWJLaXQvNTM3LjM2IChLSFRNTCwgbGlrZSBHZWNrbykgQ2hyb21lLzEyOS4wLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMTI5LjAuMC4wIiwib3NfdmVyc2lvbiI6IjEwIiwicmVmZXJyZXIiOiJodHRwczovL2Rpc2NvcmQuY29tLz9kaXNjb3JkdG9rZW49TVRJM056TXhOVEEyT1RFMU1UQXlNekUzTlEuR1k2U2RpLm9zdl81cVpOcl9xeVdxVDBtTW0tYkJ4RVRXQzgwQzVPbzU4WlJvIiwicmVmZXJyaW5nX2RvbWFpbiI6ImRpc2NvcmQuY29tIiwicmVmZXJyaW5nX2N1cnJlbnQiOiIiLCJyZWZlcnJpbmRfZG9tYWluc19jdXJyZW50IjoiIiwicmVsZWFzZV9jaGFubmVsIjoic3RhbGxlIiwiY2xpZW50X2J1aWxkX251bWJlcjIzNDM0Mjk2OCwiY2xpZW50X2V2ZW50X3NvdXJjZSI6bnVsbH0="
 
                     var str = "{\"os\":\"Windows\",\"browser\":\"Chrome\",\"device\":\"\",\"system_locale\":\"zh-CN\",\"browser_user_agent\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36\",\"browser_version\":\"129.0.0.0\",\"os_version\":\"10\",\"referrer\":\"https://discord.com/?discordtoken={@token}\",\"referring_domain\":\"discord.com\",\"referrer_current\":\"\",\"referring_domain_current\":\"\",\"release_channel\":\"stable\",\"client_build_number\":342968,\"client_event_source\":null}";
                     str = str.Replace("{@token}", account.UserToken);
