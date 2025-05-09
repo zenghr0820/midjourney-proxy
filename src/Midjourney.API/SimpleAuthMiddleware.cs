@@ -1,6 +1,5 @@
-﻿
-
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
+using Serilog;
 
 namespace Midjourney.API
 {
@@ -65,6 +64,13 @@ namespace Midjourney.API
                     await context.Response.WriteAsync("账号不可用");
                     return;
                 }
+
+                // 普通用户可以访问的接口
+                // if (user != null && path.Equals("/mj/admin/tasks")) {
+                //     // Log.Information("管理员接口{path}被调用，用户：{User}", path, user.Name);
+                //     await _next(context);
+                //     return;
+                // }
 
                 // 如果是管理员接口，需要管理员角色
                 if (context.Request.Path.StartsWithSegments("/mj/admin"))

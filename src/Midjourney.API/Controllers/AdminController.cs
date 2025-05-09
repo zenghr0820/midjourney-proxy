@@ -16,6 +16,7 @@ using Midjourney.Infrastructure.Storage;
 using MongoDB.Driver;
 using Serilog;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.AspNetCore.Identity;
 
 
 namespace Midjourney.API.Controllers
@@ -245,7 +246,7 @@ namespace Midjourney.API.Controllers
         /// <returns></returns>
         [AllowAnonymous]
         [HttpPost("login")]
-        public ActionResult Login([FromBody] string token)
+        public Result<CurrentUserDto> Login([FromBody] string token)
         {
             // 如果没有开启访客模式，则不允许匿名登录
             if (GlobalConfiguration.IsDemoMode != true && string.IsNullOrWhiteSpace(token))
@@ -256,22 +257,9 @@ namespace Midjourney.API.Controllers
             // 如果 DEMO 模式，并且没有传入 token，则返回空 token
             if (GlobalConfiguration.IsDemoMode == true && string.IsNullOrWhiteSpace(token))
             {
-                return Ok(new
-                {
-                    code = 1,
-                    apiSecret = "",
-                });
+                return Result.Ok(1, new CurrentUserDto());
             }
 
-            //// 如果开启访客
-            //if (string.IsNullOrWhiteSpace(token) && GlobalConfiguration.Setting.EnableGuest)
-            //{
-            //    return Ok(new
-            //    {
-            //        code = 1,
-            //        apiSecret = "",
-            //    });
-            //}
 
             var user = DbHelper.Instance.UserStore.Single(u => u.Token == token);
             if (user == null)
@@ -285,10 +273,10 @@ namespace Midjourney.API.Controllers
             }
 
             // 非演示模式，普通用户和访客无法登录后台
-            if (user.Role != EUserRole.ADMIN && GlobalConfiguration.IsDemoMode != true)
-            {
-                throw new LogicException("用户无权限");
-            }
+            // if (user.Role != EUserRole.ADMIN && GlobalConfiguration.IsDemoMode != true)
+            // {
+            //     throw new LogicException("用户无权限");
+            // }
 
             // 更新最后登录时间
             user.LastLoginTime = DateTime.Now;
@@ -296,11 +284,37 @@ namespace Midjourney.API.Controllers
 
             DbHelper.Instance.UserStore.Update(user);
 
-            return Ok(new
+            return Result.Ok(1, user.ToDto());
+        }
+
+        /// <summary>
+        ///  获取当前登录用户信息
+        /// </summary>
+        /// <returns></returns>
+        [HttpGet("current")]
+        [AllowAnonymous]
+        public ActionResult<CurrentUserDto> CurrentUser()
+        {
+            // 获取当前用户
+            var user = _workContext.GetUser();
+            // 如果未开启访客，且未登录，且未开启演示模式，则返回 403
+            if (GlobalConfiguration.Setting.EnableGuest != true && user == null && GlobalConfiguration.IsDemoMode != true)
             {
-                code = 1,
-                apiSecret = user.Token,
-            });
+                return StatusCode(403);
+            }
+
+            if (user == null)
+            {
+                return Ok(new CurrentUserDto
+                {
+                    Name = "Guest",
+                    Email = "",
+                    Role = "Guest",
+                    Version = GlobalConfiguration.Version,
+                });
+            }
+
+            return Ok(user.ToDto());
         }
 
         /// <summary>
@@ -382,57 +396,6 @@ namespace Midjourney.API.Controllers
             }
 
             return Ok();
-        }
-
-        /// <summary>
-        /// 当前用户信息
-        /// </summary>
-        /// <returns></returns>
-        [HttpGet("current")]
-        [AllowAnonymous]
-        public ActionResult Current()
-        {
-            var user = _workContext.GetUser();
-
-            var token = user?.Token;
-            var name = user?.Name ?? "Guest";
-
-            // 如果未开启访客，且未登录，且未开启演示模式，则返回 403
-            if (GlobalConfiguration.Setting.EnableGuest != true && user == null && GlobalConfiguration.IsDemoMode != true)
-            {
-                return StatusCode(403);
-            }
-
-            return Ok(new
-            {
-                id = name,
-                userid = name,
-                name = name,
-                apiSecret = token,
-                version = GlobalConfiguration.Version,
-                active = true,
-                imagePrefix = "",
-                avatar = "",
-                email = "",
-                signature = "",
-                title = "",
-                group = "",
-                tags = new[]
-                {
-                    new { key = "role",label = user?.Role?.GetDescription() ?? "Guest" },
-                },
-                notifyCount = 0,
-                unreadCount = 0,
-                country = "",
-                access = "",
-                geographic = new
-                {
-                    province = new { label = "", key = "" },
-                    city = new { label = "", key = "" }
-                },
-                address = "",
-                phone = ""
-            });
         }
 
         /// <summary>
@@ -1205,6 +1168,7 @@ namespace Midjourney.API.Controllers
         /// </summary>
         /// <returns>所有任务信息</returns>
         [HttpPost("tasks")]
+        [AllowAnonymous]
         public ActionResult<StandardTableResult<TaskInfo>> Tasks([FromBody] StandardTableParam<TaskInfo> request)
         {
             var page = request.Pagination;
@@ -1224,6 +1188,9 @@ namespace Midjourney.API.Controllers
                 }
             }
 
+            // 获取当前用户
+            var user = _workContext.GetUser();
+
             var param = request.Search;
 
             var sq = DbHelper.Instance.TaskStore.StreamQuery();
@@ -1232,6 +1199,7 @@ namespace Midjourney.API.Controllers
                     .WhereIf(!string.IsNullOrWhiteSpace(param.InstanceId), c => c.InstanceId == param.InstanceId)
                     .WhereIf(param.Status.HasValue, c => c.Status == param.Status)
                     .WhereIf(param.Action.HasValue, c => c.Action == param.Action)
+                    .WhereIf(user?.Role == EUserRole.USER, c => c.UserId == user.Id)
                     .WhereIf(!string.IsNullOrWhiteSpace(param.FailReason), c => c.FailReason.Contains(param.FailReason))
                     .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description));
 

@@ -13,7 +13,6 @@ namespace Midjourney.API.Controllers
     /// </summary>
     [ApiController]
     [Route("mj/home")]
-    [AllowAnonymous]
     public class HomeController : ControllerBase
     {
         private readonly IMemoryCache _memoryCache;
