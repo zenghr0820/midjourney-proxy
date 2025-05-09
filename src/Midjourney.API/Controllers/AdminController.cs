@@ -1100,7 +1100,7 @@ namespace Midjourney.API.Controllers
 
             var streamQ = DbHelper.Instance.AccountStore.StreamQuery();
 
-            var query = streamQ
+            var query =  DbHelper.Instance.AccountStore.StreamQuery()
                     .WhereIf(!string.IsNullOrWhiteSpace(param.GuildId), c => c.GuildId == param.GuildId)
                     .WhereIf(!string.IsNullOrWhiteSpace(param.ChannelId), c => c.ChannelId == param.ChannelId)
                     .WhereIf(param.Enable.HasValue, c => c.Enable == param.Enable)
