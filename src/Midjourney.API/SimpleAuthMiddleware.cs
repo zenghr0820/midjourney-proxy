@@ -45,54 +45,62 @@ namespace Midjourney.API
             // 检查是否有 AllowAnonymous 特性
             var endpoint = context.GetEndpoint();
             var allowAnonymous = endpoint?.Metadata?.GetMetadata<IAllowAnonymous>() != null;
-            if (!allowAnonymous)
-            {
-                var user = workContext.GetUser();
 
-                // 如果用户被禁用
-                if (user?.Status == EUserStatus.DISABLED)
+            if (allowAnonymous)
+            {
+                await _next(context);
+                return;
+            }
+
+
+            var user = workContext.GetUser();
+
+            // 如果用户被禁用
+            if (user?.Status == EUserStatus.DISABLED)
+            {
+                if (!context.Response.HasStarted)
                 {
                     context.Response.StatusCode = 401;
                     await context.Response.WriteAsync("账号已禁用");
-                    return;
                 }
+                return;
+            }
 
-                // 如果账号不可用
-                if (user != null && !user.IsAvailable)
+            // 如果账号不可用
+            if (user != null && !user.IsAvailable)
+            {
+                if (!context.Response.HasStarted)
                 {
                     context.Response.StatusCode = 403;
                     await context.Response.WriteAsync("账号不可用");
-                    return;
                 }
+                return;
+            }
 
-                // 普通用户可以访问的接口
-                // if (user != null && path.Equals("/mj/admin/tasks")) {
-                //     // Log.Information("管理员接口{path}被调用，用户：{User}", path, user.Name);
-                //     await _next(context);
-                //     return;
-                // }
-
-                // 如果是管理员接口，需要管理员角色
-                if (context.Request.Path.StartsWithSegments("/mj/admin"))
+            // 管理员接口权限检查
+            if (context.Request.Path.StartsWithSegments("/mj/admin"))
+            {
+                if (user?.Role != EUserRole.ADMIN)
                 {
-                    if (user?.Role != EUserRole.ADMIN)
+                    if (!context.Response.HasStarted)
                     {
                         context.Response.StatusCode = 401;
                         await context.Response.WriteAsync("账号无权限");
-                        return;
                     }
+                    return;
                 }
-                else
+            }
+            else
+            {
+                // 非管理员接口：未登录且未开启访客模式
+                if (user == null && !GlobalConfiguration.Setting.EnableGuest)
                 {
-                    // 非管理员接口，只要登录即可或开启访客模式
-                    // 未开启访客
-                    // 并且不允许匿名访问，则返回 401
-                    if (user == null && !GlobalConfiguration.Setting.EnableGuest)
+                    if (!context.Response.HasStarted)
                     {
                         context.Response.StatusCode = 401;
                         await context.Response.WriteAsync("Authorization header missing.");
-                        return;
                     }
+                    return;
                 }
             }
 

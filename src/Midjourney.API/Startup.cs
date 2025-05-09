@@ -248,13 +248,16 @@ namespace Midjourney.API
 
             app.UseRouting();
 
-            // 使用自定义中间件
+            app.UseAuthorization();
+
+            // ⭐ 注册日志中间件（在认证之后，其他中间件之前）
+            app.UseMiddleware<LogRequestMiddleware>();
+
+            // 简单的授权中间件
             app.UseMiddleware<SimpleAuthMiddleware>();
 
             // 限流
             app.UseMiddleware<RateLimitingMiddleware>();
-
-            app.UseAuthorization();
 
             app.UseEndpoints(endpoints =>
             {
