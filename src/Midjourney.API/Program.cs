@@ -1,4 +1,3 @@
-
 using Serilog;
 using Serilog.Debugging;
 using System.Diagnostics;

@@ -1,11 +1,8 @@
-﻿
-
-using FreeSql.DataAnnotations;
+﻿using FreeSql.DataAnnotations;
 using LiteDB;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Dto;
 using MongoDB.Bson.Serialization.Attributes;
-using Newtonsoft.Json.Linq;
 using System.ComponentModel.DataAnnotations;
 using System.Text.RegularExpressions;
 
@@ -334,6 +331,11 @@ namespace Midjourney.Infrastructure.Models
         public bool IsShorten { get; set; } = true;
 
         /// <summary>
+        /// 是否自动删除完成的任务消息
+        /// </summary>
+        public bool AutoDeleteMessages { get; set; } = false;
+
+        /// <summary>
         /// 账号（用于自动登录）
         /// </summary>
         public string LoginAccount { get; set; }
@@ -656,6 +658,7 @@ namespace Midjourney.Infrastructure.Models
                 EnableFastToRelax = configAccount.EnableFastToRelax,
                 EnableRelaxToFast = configAccount.EnableRelaxToFast,
                 EnableAutoSetRelax = configAccount.EnableAutoSetRelax,
+                AutoDeleteMessages = configAccount.AutoDeleteMessages,
 
                 LoginAccount = configAccount.LoginAccount,
                 LoginPassword = configAccount.LoginPassword,

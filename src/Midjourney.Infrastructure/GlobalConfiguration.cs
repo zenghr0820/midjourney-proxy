@@ -1,6 +1,4 @@
-﻿
-
-using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.Extensions.Caching.Memory;
 using System.Runtime.InteropServices;
 
 namespace Midjourney.Infrastructure

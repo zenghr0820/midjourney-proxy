@@ -1,6 +1,4 @@
-﻿
-
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
@@ -572,6 +570,37 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 catch (Exception ex)
                 {
                     _logger.Error(ex, "自动读消息异常 {@0} - {@1}", info.InstanceId, info.Id);
+                }
+
+                // 任务完成后，检查是否需要自动删除消息
+                try
+                {
+                    // 成功且是Imagine任务时尝试删除消息, 且账号设置了自动删除消息
+                    if (info.Status == TaskStatus.SUCCESS &&
+                        !string.IsNullOrWhiteSpace(info.MessageId) &&
+                        info.Action == TaskAction.IMAGINE &&
+                        Account.AutoDeleteMessages)
+                    {
+                        // 延迟1秒后删除，确保消息已被完全处理
+                        await Task.Delay(1000);
+
+                        // 使用SafeDeleteMessageAsync方法删除消息
+                        var deleteResult = await DeleteMessageAsync(info.MessageId);
+                        if (deleteResult.Code == ReturnCode.SUCCESS)
+                        {
+                            _logger.Information("自动删除消息成功 InstanceId: {@0} - TaskId: {@1} - MessageId: {@2}",
+                                info.InstanceId, info.Id, info.MessageId);
+                        }
+                        else
+                        {
+                            _logger.Warning("自动删除消息失败 InstanceId: {@0} - TaskId: {@1} - MessageId: {@2}: {3}",
+                                info.InstanceId, info.Id, info.MessageId, deleteResult.Description);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Error(ex, "自动删除消息异常 InstanceId: {@0} - TaskId: {@1} - MessageId: {@2}", info.InstanceId, info.Id, info.MessageId);
                 }
 
                 _logger.Debug("[{AccountDisplay}] task finished, id: {TaskId}, status: {TaskStatus}", Account.GetDisplay(), info.Id, info.Status);
@@ -1544,7 +1573,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             return str;
         }
 
- 
+
         /// <summary>
         /// 上传文件到 Discord 或 文件存储
         /// </summary>
@@ -1665,7 +1694,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             var url = $"{_discordMessageUrl}/{lastMessageId}/ack";
 
             HttpResponseMessage response = await PostJsonAsync(url, paramsStr);
-            if (response.StatusCode != System.Net.HttpStatusCode.OK)
+            if (response.StatusCode != HttpStatusCode.OK)
             {
                 _logger.Error("自动读discord消息失败, status: {StatusCode}, msg: {Body}", response.StatusCode, await response.Content.ReadAsStringAsync());
                 return Message.Of(ReturnCode.VALIDATION_ERROR, "自动读discord消息失败");
@@ -1686,16 +1715,26 @@ namespace Midjourney.Infrastructure.LoadBalancer
             }
 
             var url = $"{_discordMessageUrl}/{messageId}";
-            
-            HttpResponseMessage response = await DeleteAsync(url);
-            if (response.StatusCode != System.Net.HttpStatusCode.NoContent)
+
+            try
             {
-                _logger.Error("删除Discord消息失败, status: {StatusCode}, msg: {Body}", response.StatusCode, await response.Content.ReadAsStringAsync());
+                HttpResponseMessage response = await DeleteAsync(url);
+                if (response.StatusCode != HttpStatusCode.NoContent &&
+                    response.StatusCode != HttpStatusCode.OK)
+                {
+                    _logger.Error("删除Discord消息失败, url: {Url}, status: {StatusCode}, msg: {Body}", url, response.StatusCode, await response.Content.ReadAsStringAsync());
+                    return Message.Of(ReturnCode.VALIDATION_ERROR, "删除Discord消息失败");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "删除Discord消息失败, url: {Url}", url);
                 return Message.Of(ReturnCode.VALIDATION_ERROR, "删除Discord消息失败");
             }
+
             return Message.Success();
         }
-        
+
         /// <summary>
         /// 发送DELETE请求到指定URL
         /// </summary>
@@ -1703,24 +1742,16 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <returns>HTTP响应消息</returns>
         private async Task<HttpResponseMessage> DeleteAsync(string url)
         {
-            try
-            {
-                var request = new HttpRequestMessage(HttpMethod.Delete, url);
-                
-                // 添加请求头
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Account.UserToken);
-                request.Headers.UserAgent.ParseAdd(Account.UserAgent);
-                
-                // 发送请求
-                return await _httpClient.SendAsync(request);
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "DELETE请求执行异常 {@0}", url);
-                throw;
-            }
-        }
+            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Delete, url);
 
+            // 添加请求头
+            request.Headers.UserAgent.ParseAdd(Account.UserAgent);
+            // 设置 request Authorization 为 UserToken，不需要 Bearer 前缀
+            request.Headers.Add("Authorization", Account.UserToken);
+
+            // 发送请求
+            return await _httpClient.SendAsync(request);
+        }
         private async Task PutFileAsync(string uploadUrl, DataUrl dataUrl)
         {
             uploadUrl = _discordHelper.GetDiscordUploadUrl(uploadUrl);

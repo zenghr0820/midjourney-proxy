@@ -803,7 +803,7 @@ namespace Midjourney.API.Controllers
 
             if (model != null)
             {
-                throw new LogicException("渠道已存在");
+                throw new LogicException("频道已存在");
             }
 
             var account = DiscordAccount.Create(accountConfig);
@@ -914,6 +914,7 @@ namespace Midjourney.API.Controllers
             model.IsBlend = param.IsBlend;
             model.EnableMj = param.EnableMj;
             model.EnableNiji = param.EnableNiji;
+            model.AutoDeleteMessages = param.AutoDeleteMessages;
             model.IsDescribe = param.IsDescribe;
             model.IsShorten = param.IsShorten;
             model.DayDrawLimit = param.DayDrawLimit;
@@ -1190,6 +1191,7 @@ namespace Midjourney.API.Controllers
 
             // 获取当前用户
             var user = _workContext.GetUser();
+            var userId = user?.Id ?? "";
 
             var param = request.Search;
 
@@ -1199,7 +1201,7 @@ namespace Midjourney.API.Controllers
                     .WhereIf(!string.IsNullOrWhiteSpace(param.InstanceId), c => c.InstanceId == param.InstanceId)
                     .WhereIf(param.Status.HasValue, c => c.Status == param.Status)
                     .WhereIf(param.Action.HasValue, c => c.Action == param.Action)
-                    .WhereIf(user?.Role == EUserRole.USER, c => c.UserId == user.Id)
+                    .WhereIf(user?.Role != EUserRole.ADMIN, c => c.UserId == userId)
                     .WhereIf(!string.IsNullOrWhiteSpace(param.FailReason), c => c.FailReason.Contains(param.FailReason))
                     .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description));
 

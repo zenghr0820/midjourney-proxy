@@ -1,6 +1,4 @@
-﻿
-
-using LiteDB;
+﻿using LiteDB;
 using Midjourney.Infrastructure.Data;
 
 namespace Midjourney.Infrastructure
@@ -395,6 +393,11 @@ namespace Midjourney.Infrastructure
         /// 用户UserAgent.
         /// </summary>
         public string UserAgent { get; set; } = Constants.DEFAULT_DISCORD_USER_AGENT;
+
+        /// <summary>
+        /// 是否自动删除完成的任务消息
+        /// </summary>
+        public bool AutoDeleteMessages { get; set; } = false;
 
         /// <summary>
         /// 是否可用.

@@ -951,6 +951,7 @@ namespace Midjourney.API
                 model.FishingTime = param.FishingTime;
                 model.EnableNiji = param.EnableNiji;
                 model.EnableMj = param.EnableMj;
+                model.AutoDeleteMessages = param.AutoDeleteMessages;
                 model.AllowModes = param.AllowModes;
                 model.WorkTime = param.WorkTime;
                 model.Interval = param.Interval;
