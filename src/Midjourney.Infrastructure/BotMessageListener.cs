@@ -1,6 +1,4 @@
-﻿
-
-using Discord;
+﻿using Discord;
 using Discord.Commands;
 using Discord.Net.Rest;
 using Discord.Net.WebSockets;
@@ -142,6 +140,40 @@ namespace Midjourney.Infrastructure
         }
 
         /// <summary>
+        /// 检查频道是否属于当前账号
+        /// </summary>
+        private bool IsChannelBelongsToAccount(ISocketMessageChannel channel)
+        {
+            if (channel == null)
+            {
+                return false;
+            }
+
+            string channelId = channel.Id.ToString();
+
+            // 检查是否为主频道
+            if (channelId == Account.ChannelId)
+            {
+                return true;
+            }
+
+            // 检查是否为子频道
+            if (Account.SubChannelValues.ContainsKey(channelId))
+            {
+                return true;
+            }
+
+            // 检查是否为私信频道
+            if (channel is SocketDMChannel &&
+                (channelId == Account.PrivateChannelId || channelId == Account.NijiBotChannelId))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// 处理接收到的消息
         /// </summary>
         /// <param name="arg"></param>
@@ -154,7 +186,14 @@ namespace Midjourney.Infrastructure
                 if (msg == null)
                     return;
 
-                _logger.Information($"BOT Received, {msg.Type}, id: {msg.Id}, rid: {msg.Reference?.MessageId.Value}, mid: {msg?.InteractionMetadata?.Id}, {msg.Content}");
+
+                _logger.Information($"BOT Received, {msg.Type}, id: {msg.Id}, rid: {msg.Reference?.MessageId.Value}, mid: {msg?.InteractionMetadata?.Id}, {msg.Content}, channel: {msg.Channel?.Id}");
+
+                // 验证消息是否来自当前账号的频道
+                if (!IsChannelBelongsToAccount(msg.Channel))
+                {
+                    return;
+                }
 
                 if (!string.IsNullOrWhiteSpace(msg.Content) && msg.Author.IsBot)
                 {
@@ -207,7 +246,14 @@ namespace Midjourney.Infrastructure
                 if (msg == null)
                     return;
 
-                _logger.Information($"BOT Updated, {msg.Type}, id: {msg.Id}, rid: {msg.Reference?.MessageId.Value}, {msg.Content}");
+                _logger.Information($"BOT Updated, {msg.Type}, id: {msg.Id}, rid: {msg.Reference?.MessageId.Value}, {msg.Content}, channel: {channel?.Id}");
+
+                // 验证消息是否来自当前账号的频道
+                if (!IsChannelBelongsToAccount(channel))
+                {
+                    return;
+                }
+
 
                 if (!string.IsNullOrWhiteSpace(msg.Content)
                     && msg.Content.Contains("%")
