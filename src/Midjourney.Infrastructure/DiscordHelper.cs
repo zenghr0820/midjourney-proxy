@@ -157,7 +157,7 @@ namespace Midjourney.Infrastructure
         /// </summary>
         /// <param name="imageUrl">图像 URL。</param>
         /// <returns>消息哈希。</returns>
-        public string GetMessageHash(string imageUrl)
+        public static string GetMessageHash(string imageUrl)
         {
             if (string.IsNullOrWhiteSpace(imageUrl))
             {

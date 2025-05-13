@@ -19,6 +19,7 @@ namespace Midjourney.Infrastructure.Models
     [Index("i_UserId", "UserId")]
     [Index("i_ClientIp", "ClientIp")]
     [Index("i_InstanceId", "InstanceId")]
+    [Index("i_ChannelId", "ChannelId")]
     [Index("i_SubmitTime", "SubmitTime")]
     [Index("i_Status", "Status")]
     [Index("i_Action", "Action")]
@@ -91,9 +92,14 @@ namespace Midjourney.Infrastructure.Models
         public bool RemixModaling { get; set; }
 
         /// <summary>
-        /// 账号实例 ID = 账号渠道 ID = ChannelId
+        /// 账号实例 ID = 服务器ID
         /// </summary>
         public string InstanceId { get; set; }
+        
+        /// <summary>
+        /// 频道 ID
+        /// </summary>
+        public string ChannelId { get; set; }
 
         /// <summary>
         /// 子频道 ID

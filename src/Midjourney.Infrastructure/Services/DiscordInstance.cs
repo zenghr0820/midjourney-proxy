@@ -9,6 +9,7 @@ using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Services;
 using Midjourney.Infrastructure.Storage;
 using Midjourney.Infrastructure.Util;
+using Midjourney.Infrastructure.Wss;
 using Newtonsoft.Json.Linq;
 using Serilog;
 using ILogger = Serilog.ILogger;
@@ -29,108 +30,27 @@ namespace Midjourney.Infrastructure.LoadBalancer
         private readonly INotifyService _notifyService;
 
         /// <summary>
-        /// 正在运行的任务列表 key：任务ID，value：任务信息
+        /// Discord频道池
         /// </summary>
-        private readonly ConcurrentDictionary<string, TaskInfo> _runningTasks = [];
+        private readonly ConcurrentDictionary<string, DiscordChannel> _channelPool = new();
 
         /// <summary>
-        /// 任务Future映射 key：任务ID，value：作业 Action
+        /// 主频道ID（用于兼容旧逻辑）
         /// </summary>
-        private readonly ConcurrentDictionary<string, Task> _taskFutureMap = [];
-
-        private readonly AsyncParallelLock _semaphoreSlimLock;
-
-        private readonly Task _longTask;
-        private readonly Task _longTaskCache;
+        private string _primaryChannelId;
 
         private readonly CancellationTokenSource _longToken;
-        private readonly ManualResetEvent _mre; // 信号
+        private readonly Task _longTaskCache;
 
         private readonly HttpClient _httpClient;
         private readonly DiscordHelper _discordHelper;
         private readonly Dictionary<string, string> _paramsMap;
 
         private readonly string _discordInteractionUrl;
-        private readonly string _discordAttachmentUrl;
-        private readonly string _discordMessageUrl;
         private readonly IMemoryCache _cache;
         private readonly ITaskService _taskService;
 
-        /// <summary>
-        /// 当前队列任务
-        /// </summary>
-        private ConcurrentQueue<(TaskInfo, Func<Task<Message>>)> _queueTasks = [];
-
         private DiscordAccount _account;
-
-        public DiscordInstance(
-            IMemoryCache memoryCache,
-            DiscordAccount account,
-            ITaskStoreService taskStoreService,
-            INotifyService notifyService,
-            DiscordHelper discordHelper,
-            Dictionary<string, string> paramsMap,
-            IWebProxy webProxy,
-            ITaskService taskService)
-        {
-            _logger = Log.Logger;
-
-            var hch = new HttpClientHandler
-            {
-                UseProxy = webProxy != null,
-                Proxy = webProxy
-            };
-
-            _httpClient = new HttpClient(hch)
-            {
-                Timeout = TimeSpan.FromMinutes(10),
-            };
-
-            _taskService = taskService;
-            _cache = memoryCache;
-            _paramsMap = paramsMap;
-            _discordHelper = discordHelper;
-
-            _account = account;
-            _taskStoreService = taskStoreService;
-            _notifyService = notifyService;
-
-            // 最小 1, 最大 12
-            _semaphoreSlimLock = new AsyncParallelLock(Math.Max(1, Math.Min(account.CoreSize, 12)));
-
-            // 初始化信号器
-            _mre = new ManualResetEvent(false);
-
-            var discordServer = _discordHelper.GetServer();
-
-            _discordInteractionUrl = $"{discordServer}/api/v9/interactions";
-            _discordAttachmentUrl = $"{discordServer}/api/v9/channels/{account.ChannelId}/attachments";
-            _discordMessageUrl = $"{discordServer}/api/v9/channels/{account.ChannelId}/messages";
-
-            // 后台任务
-            // 后台任务取消 token
-            _longToken = new CancellationTokenSource();
-            _longTask = new Task(Running, _longToken.Token, TaskCreationOptions.LongRunning);
-            _longTask.Start();
-
-            _longTaskCache = new Task(RuningCache, _longToken.Token, TaskCreationOptions.LongRunning);
-            _longTaskCache.Start();
-        }
-
-        /// <summary>
-        /// 默认会话ID。
-        /// </summary>
-        public string DefaultSessionId { get; set; } = "f1a313a09ce079ce252459dc70231f30";
-
-        /// <summary>
-        /// 获取实例ID。
-        /// </summary>
-        /// <returns>实例ID</returns>
-        public string ChannelId => Account.ChannelId;
-
-        public BotMessageListener BotMessageListener { get; set; }
-
-        public WebSocketManager WebSocketManager { get; set; }
 
         /// <summary>
         /// 获取Discord账号信息。
@@ -175,13 +95,26 @@ namespace Midjourney.Infrastructure.LoadBalancer
         }
 
         /// <summary>
-        /// 清理账号缓存
+        /// 默认会话ID。
         /// </summary>
-        /// <param name="id"></param>
-        public void ClearAccountCache(string id)
-        {
-            _cache.Remove($"account:{id}");
-        }
+        public string DefaultSessionId { get; set; } = "f1a313a09ce079ce252459dc70231f30";
+
+        /// <summary>
+        /// 获取实例ID = 服务器ID
+        /// </summary>
+        /// <returns>实例ID</returns>
+        public string GuildId => Account.GuildId;
+
+        /// <summary>
+        /// 获取频道ID
+        /// </summary>
+        /// <returns>频道ID</returns>
+        public string ChannelId => Account.ChannelId;
+
+        /// <summary>
+        /// 获取所有频道ID
+        /// </summary>
+        public List<string> AllChannelIds => _channelPool.Keys.ToList();
 
         /// <summary>
         /// 是否已初始化完成
@@ -194,77 +127,157 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <returns>是否存活</returns>
         public bool IsAlive => IsInit && Account != null
              && Account.Enable != null && Account.Enable == true
-             && WebSocketManager != null
-             && WebSocketManager.Running == true
+             && WebSocketStarter != null
+             && WebSocketStarter.IsRunning == true
              && Account.Lock == false;
 
-        /// <summary>
-        /// 获取正在运行的任务列表。
-        /// </summary>
-        /// <returns>正在运行的任务列表</returns>
-        public List<TaskInfo> GetRunningTasks() => _runningTasks.Values.ToList();
+        public IWebSocketStarter WebSocketStarter { get; set; }
 
-        /// <summary>
-        /// 获取队列中的任务列表。
-        /// </summary>
-        /// <returns>队列中的任务列表</returns>
-        public List<TaskInfo> GetQueueTasks() => new List<TaskInfo>(_queueTasks.Select(c => c.Item1) ?? []);
-
-        /// <summary>
-        /// 是否存在空闲队列，即：队列是否已满，是否可加入新的任务
-        /// </summary>
-        public bool IsIdleQueue => Account.QueueSize <= 0 || _queueTasks.Count < Account.QueueSize;
-
-        /// <summary>
-        /// 后台服务执行任务
-        /// </summary>
-        private void Running()
+        public DiscordInstance(
+            IMemoryCache memoryCache,
+            DiscordAccount account,
+            ITaskStoreService taskStoreService,
+            INotifyService notifyService,
+            DiscordHelper discordHelper,
+            Dictionary<string, string> paramsMap,
+            IWebProxy webProxy,
+            ITaskService taskService)
         {
-            while (true)
+            _logger = Log.Logger;
+
+            var hch = new HttpClientHandler
             {
-                try
+                UseProxy = webProxy != null,
+                Proxy = webProxy
+            };
+
+            _httpClient = new HttpClient(hch)
+            {
+                Timeout = TimeSpan.FromMinutes(10),
+            };
+
+            _taskService = taskService;
+            _cache = memoryCache;
+            _paramsMap = paramsMap;
+            _discordHelper = discordHelper;
+
+            _account = account;
+            _taskStoreService = taskStoreService;
+            _notifyService = notifyService;
+
+            // 初始化默认频道（主频道）
+            _primaryChannelId = account.ChannelId;
+            InitChannel(_primaryChannelId);
+
+            // 初始化频道池中的其他频道
+            if (account.ChannelIds != null)
+            {
+                foreach (var channel in account.ChannelIds)
                 {
-                    if (_longToken.Token.IsCancellationRequested)
-                    {
-                        // 清理资源（如果需要）
-                        break;
-                    }
+                    InitChannel(channel);
                 }
-                catch { }
+            }
 
-                try
+            var discordServer = _discordHelper.GetServer();
+
+            _discordInteractionUrl = $"{discordServer}/api/v9/interactions";
+
+            // 后台任务取消 token
+            _longToken = new CancellationTokenSource();
+
+            // 为每个频道启动任务处理线程
+            foreach (var channel in _channelPool)
+            {
+                StartChannelTaskProcessing(channel.Value);
+            }
+
+            // 启动缓存处理任务
+            _longTaskCache = new Task(RuningCache, _longToken.Token, TaskCreationOptions.LongRunning);
+            _longTaskCache.Start();
+
+            // 启动频道监控线程
+            StartChannelMonitoring();
+        }
+
+        /// <summary>
+        /// 初始化频道
+        /// </summary>
+        private void InitChannel(string channelId, string channelName = null)
+        {
+            if (string.IsNullOrWhiteSpace(channelId))
+                return;
+
+            if (!_channelPool.ContainsKey(channelId))
+            {
+                var channel = new DiscordChannel(
+                    channelId,
+                    channelName ?? channelId,
+                    Account.QueueSize,
+                    Math.Max(1, Math.Min(Account.CoreSize, 12))
+                );
+                _channelPool.TryAdd(channelId, channel);
+            }
+        }
+
+        /// <summary>
+        /// 启动频道任务处理线程
+        /// </summary>
+        private void StartChannelTaskProcessing(DiscordChannel channel)
+        {
+            // 创建任务处理线程
+            Task.Factory.StartNew(() =>
+            {
+                _logger.Information("频道 {0} 任务处理线程启动", channel.ChannelId);
+
+                // 设置线程名称
+                Thread.CurrentThread.Name = $"Task-{channel.ChannelId}";
+
+                // 重置信号
+                channel.SignalControl.Reset();
+
+                while (true)
                 {
-                    // 如果队列中没有任务，则等待信号通知
-                    if (_queueTasks.Count <= 0)
+                    try
                     {
-                        _mre.WaitOne();
-                    }
-
-                    // 判断是否还有资源可用
-                    while (!_semaphoreSlimLock.IsLockAvailable())
-                    {
-                        // 等待
-                        Thread.Sleep(100);
-                    }
-
-                    // 如果并发数修改，判断信号最大值是否为 Account.CoreSize
-                    while (_semaphoreSlimLock.MaxParallelism != Account.CoreSize)
-                    {
-                        // 重新设置信号量
-                        var oldMax = _semaphoreSlimLock.MaxParallelism;
-                        var newMax = Math.Max(1, Math.Min(Account.CoreSize, 12));
-                        if (_semaphoreSlimLock.SetMaxParallelism(newMax))
+                        // 如果处于取消状态，则退出
+                        if (_longToken.IsCancellationRequested)
                         {
-                            _logger.Information("频道 {@0} 信号量最大值修改成功，原值：{@1}，当前最大值：{@2}", Account.ChannelId, oldMax, newMax);
+                            break;
                         }
 
-                        Thread.Sleep(500);
-                    }
+                        // 如果队列为空且没有运行中的任务，等待信号
+                        if (channel.QueueTasks.IsEmpty && channel.RunningTasks.IsEmpty)
+                        {
+                            channel.SignalControl.WaitOne(TimeSpan.FromSeconds(15));
+                            continue;
+                        }
 
-                    while (_queueTasks.TryPeek(out var info))
-                    {
                         // 判断是否还有资源可用
-                        if (_semaphoreSlimLock.IsLockAvailable())
+                        if (!channel.SemaphoreSlimLock.IsLockAvailable())
+                        {
+                            // 如果没有可用资源，等待
+                            Thread.Sleep(100);
+                            continue;
+                        }
+
+                        // 如果并发数修改，判断信号最大值是否为 Account.CoreSize
+                        if (channel.SemaphoreSlimLock.MaxParallelism != Account.CoreSize)
+                        {
+                            // 重新设置信号量
+                            var oldMax = channel.SemaphoreSlimLock.MaxParallelism;
+                            var newMax = Math.Max(1, Math.Min(Account.CoreSize, 12));
+                            if (channel.SemaphoreSlimLock.SetMaxParallelism(newMax))
+                            {
+                                _logger.Information("频道 {0} 信号量最大值修改成功，原值：{1}，当前最大值：{2}",
+                                    channel.ChannelId, oldMax, newMax);
+                            }
+
+                            Thread.Sleep(500);
+                            continue;
+                        }
+
+                        // 检查队列中是否有任务
+                        if (channel.QueueTasks.TryPeek(out var queueTask))
                         {
                             var preSleep = Account.Interval;
                             if (preSleep <= 1.2m)
@@ -277,9 +290,10 @@ namespace Midjourney.Infrastructure.LoadBalancer
                             Thread.Sleep((int)(preSleep * 1000));
 
                             // 从队列中移除任务，并开始执行
-                            if (_queueTasks.TryDequeue(out info))
+                            if (channel.QueueTasks.TryDequeue(out var info))
                             {
-                                _taskFutureMap[info.Item1.Id] = ExecuteTaskAsync(info.Item1, info.Item2);
+                                // 使用原有的ExecuteTaskAsync方法执行任务
+                                channel.TaskFutureMap[info.Item1.Id] = ExecuteTaskAsync(channel, info.Item1, info.Item2);
 
                                 // 计算执行后的间隔
                                 var min = Account.AfterIntervalMin;
@@ -311,58 +325,117 @@ namespace Midjourney.Infrastructure.LoadBalancer
                         }
                         else
                         {
-                            // 如果没有可用资源，等待
+                            // 如果队列为空，重置信号
+                            channel.SignalControl.Reset();
                             Thread.Sleep(100);
                         }
                     }
-
-                    // 重新设置信号
-                    _mre.Reset();
+                    catch (Exception ex)
+                    {
+                        _logger.Error(ex, "频道 {0} 任务处理线程异常", channel.ChannelId);
+                        // 发生异常时等待 3 秒再继续
+                        Thread.Sleep(3000);
+                    }
                 }
-                catch (Exception ex)
+
+                _logger.Information("频道 {0} 任务处理线程结束", channel.ChannelId);
+            }, _longToken.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
+
+        /// <summary>
+        /// 清理账号缓存
+        /// </summary>
+        /// <param name="id"></param>
+        public void ClearAccountCache(string id)
+        {
+            _cache.Remove($"account:{id}");
+        }
+
+
+        /// <summary>
+        /// 获取指定频道
+        /// </summary>
+        public DiscordChannel GetChannel(string channelId)
+        {
+            // 使用智能选择逻辑获取频道ID
+            channelId = GetAvailableChannelId(channelId);
+
+            if (_channelPool.TryGetValue(channelId, out var channel))
+            {
+                return channel;
+            }
+
+            // 如果找不到指定频道，返回主频道
+            if (_primaryChannelId != channelId && _channelPool.TryGetValue(_primaryChannelId, out var primaryChannel))
+            {
+                return primaryChannel;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 获取正在运行的任务列表。
+        /// </summary>
+        /// <returns>正在运行的任务列表</returns>
+        public List<TaskInfo> GetRunningTasks(string channelId = null)
+        {
+            if (string.IsNullOrWhiteSpace(channelId))
+            {
+                // 返回所有频道的任务
+                var tasks = new List<TaskInfo>();
+                foreach (var channel in _channelPool.Values)
                 {
-                    _logger.Error(ex, $"后台作业执行异常 {Account?.ChannelId}");
-
-                    // 停止 1min
-                    Thread.Sleep(1000 * 60);
+                    tasks.AddRange(channel.GetRunningTasks());
                 }
+                return tasks;
+            }
+            else
+            {
+                // 返回指定频道的任务
+                var channel = GetChannel(channelId);
+                return channel?.GetRunningTasks() ?? new List<TaskInfo>();
             }
         }
 
         /// <summary>
-        /// 缓存处理
+        /// 获取队列中的任务列表。
         /// </summary>
-        private void RuningCache()
+        /// <returns>队列中的任务列表</returns>
+        public List<TaskInfo> GetQueueTasks(string channelId = null)
         {
-            while (true)
+            if (string.IsNullOrWhiteSpace(channelId))
             {
-                if (_longToken.Token.IsCancellationRequested)
+                // 返回所有频道的任务
+                var tasks = new List<TaskInfo>();
+                foreach (var channel in _channelPool.Values)
                 {
-                    // 清理资源（如果需要）
-                    break;
+                    tasks.AddRange(channel.GetQueueTasks());
                 }
+                return tasks;
+            }
+            else
+            {
+                // 返回指定频道的任务
+                var channel = GetChannel(channelId);
+                return channel?.GetQueueTasks() ?? new List<TaskInfo>();
+            }
+        }
 
-                try
-                {
-                    // 当前时间转为 Unix 时间戳
-                    // 今日 0 点 Unix 时间戳
-                    var now = new DateTimeOffset(DateTime.Now.Date).ToUnixTimeMilliseconds();
-                    var count = (int)DbHelper.Instance.TaskStore.Count(c => c.SubmitTime >= now && c.InstanceId == Account.ChannelId);
-
-                    if (Account.DayDrawCount != count)
-                    {
-                        Account.DayDrawCount = count;
-
-                        DbHelper.Instance.AccountStore.Update("DayDrawCount", Account);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.Error(ex, "RuningCache 异常");
-                }
-
-                // 每 2 分钟执行一次
-                Thread.Sleep(60 * 1000 * 2);
+        /// <summary>
+        /// 是否存在空闲队列，即：队列是否已满，是否可加入新的任务
+        /// </summary>
+        public bool IsIdleQueue(string channelId = null)
+        {
+            if (string.IsNullOrWhiteSpace(channelId))
+            {
+                // 如果有任何一个频道有空闲，就返回true
+                return _channelPool.Values.Any(c => c.IsIdleQueue);
+            }
+            else
+            {
+                var channel = GetChannel(channelId);
+                return channel?.IsIdleQueue ?? false;
             }
         }
 
@@ -372,78 +445,147 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <param name="task">任务信息</param>
         public void ExitTask(TaskInfo task)
         {
-            _taskFutureMap.TryRemove(task.Id, out _);
-            SaveAndNotify(task);
-
-            // 判断 _queueTasks 队列中是否存在指定任务，如果有则移除
-            //if (_queueTasks.Any(c => c.Item1.Id == task.Id))
-            //{
-            //    _queueTasks = new ConcurrentQueue<(TaskInfo, Func<Task<Message>>)>(_queueTasks.Where(c => c.Item1.Id != task.Id));
-            //}
-
-            // 判断 _queueTasks 队列中是否存在指定任务，如果有则移除
-            // 使用线程安全的方式移除
-            if (_queueTasks.Any(c => c.Item1.Id == task.Id))
+            foreach (var channel in _channelPool.Values)
             {
-                // 移除 _queueTasks 队列中指定的任务
-                var tempQueue = new ConcurrentQueue<(TaskInfo, Func<Task<Message>>)>();
-
-                // 将不需要移除的元素加入到临时队列中
-                while (_queueTasks.TryDequeue(out var item))
+                if (channel.TaskFutureMap.TryRemove(task.Id, out _))
                 {
-                    if (item.Item1.Id != task.Id)
+                    // 移除 QueueTasks 队列中指定的任务
+                    if (channel.QueueTasks.Any(c => c.Item1.Id == task.Id))
                     {
-                        tempQueue.Enqueue(item);
-                    }
-                }
+                        var tempQueue = new ConcurrentQueue<(TaskInfo, Func<Task<Message>>)>();
 
-                // 交换队列引用
-                _queueTasks = tempQueue;
+                        // 将不需要移除的元素加入到临时队列中
+                        while (channel.QueueTasks.TryDequeue(out var item))
+                        {
+                            if (item.Item1.Id != task.Id)
+                            {
+                                tempQueue.Enqueue(item);
+                            }
+                        }
+
+                        // 交换队列引用
+                        channel.QueueTasks = tempQueue;
+                    }
+                    break;
+                }
             }
+
+            SaveAndNotify(task);
         }
 
         /// <summary>
         /// 获取正在运行的任务Future映射。
         /// </summary>
         /// <returns>任务Future映射</returns>
-        public Dictionary<string, Task> GetRunningFutures() => new Dictionary<string, Task>(_taskFutureMap);
+        public Dictionary<string, Task> GetRunningFutures(string channelId = null)
+        {
+            if (string.IsNullOrWhiteSpace(channelId))
+            {
+                // 返回所有频道的任务
+                var futures = new Dictionary<string, Task>();
+                foreach (var channel in _channelPool.Values)
+                {
+                    foreach (var item in channel.TaskFutureMap)
+                    {
+                        futures[item.Key] = item.Value;
+                    }
+                }
+                return futures;
+            }
+            else
+            {
+                // 返回指定频道的任务
+                var channel = GetChannel(channelId);
+                return channel?.TaskFutureMap.ToDictionary(k => k.Key, v => v.Value) ?? new Dictionary<string, Task>();
+            }
+        }
+
+        /// <summary>
+        /// 获取可用频道ID
+        /// </summary>
+        /// <param name="preferredChannelId">优先使用的频道ID，如果为空则自动选择</param>
+        /// <returns>可用的频道ID</returns>
+        public string GetAvailableChannelId(string preferredChannelId = null)
+        {
+            // 1. 如果指定了频道ID且该频道存在，优先使用
+            if (!string.IsNullOrWhiteSpace(preferredChannelId) && _channelPool.ContainsKey(preferredChannelId))
+            {
+                var preferredChannel = _channelPool[preferredChannelId];
+                if (preferredChannel.Enable && preferredChannel.IsIdleQueue)
+                {
+                    return preferredChannelId;
+                }
+            }
+
+
+            // 3. 根据规则选择空闲频道
+            var availableChannels = _channelPool.Values
+                .Where(c => c.Enable && c.IsIdleQueue)
+                .ToList();
+
+            if (availableChannels.Count == 0)
+            {
+                // 没有可用频道，返回主频道（即使它可能已满）
+                return _primaryChannelId;
+            }
+
+            // 选择队列任务最少的频道
+            var channelWithLeastTasks = availableChannels
+                .OrderBy(c => c.QueueTasks.Count)
+                .ThenBy(c => c.RunningTasks.Count)
+                .FirstOrDefault();
+
+            return channelWithLeastTasks?.ChannelId ?? _primaryChannelId;
+        }
 
         /// <summary>
         /// 提交任务。
         /// </summary>
         /// <param name="info">任务信息</param>
         /// <param name="discordSubmit">Discord提交任务的委托</param>
+        /// <param name="channelId">频道ID，为空则智能选择可用频道</param>
         /// <returns>任务提交结果</returns>
-        public SubmitResultVO SubmitTaskAsync(TaskInfo info, Func<Task<Message>> discordSubmit)
+        public SubmitResultVO SubmitTaskAsync(TaskInfo info, Func<Task<Message>> discordSubmit, string channelId = null)
         {
+            var channel = GetChannel(channelId);
+            if (channel == null)
+            {
+                return SubmitResultVO.Fail(ReturnCode.FAILURE, $"提交失败，频道 {channelId} 不存在")
+                    .SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, GuildId);
+            }
+
             // 在任务提交时，前面的的任务数量
-            var currentWaitNumbers = _queueTasks.Count;
+            var currentWaitNumbers = channel.QueueTasks.Count;
             if (Account.QueueSize > 0 && currentWaitNumbers >= Account.QueueSize)
             {
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, "提交失败，队列已满，请稍后重试")
-                    .SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, ChannelId);
+                    .SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, channel.GuildId);
             }
 
-            info.InstanceId = ChannelId;
+            info.InstanceId = channel.GuildId;
+            info.ChannelId = channel.ChannelId;
+            info.SetProperty(Constants.TASK_PROPERTY_DISCORD_CHANNEL_ID, channel.ChannelId);
             _taskStoreService.Save(info);
 
             try
             {
-                _queueTasks.Enqueue((info, discordSubmit));
+                channel.QueueTasks.Enqueue((info, discordSubmit));
 
                 // 通知后台服务有新的任务
-                _mre.Set();
+                channel.SignalControl.Set();
 
                 if (currentWaitNumbers == 0)
                 {
                     return SubmitResultVO.Of(ReturnCode.SUCCESS, "提交成功", info.Id)
-                        .SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, ChannelId);
+                        .SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, channel.GuildId)
+                        .SetProperty(Constants.TASK_PROPERTY_DISCORD_CHANNEL_ID, channel.ChannelId);
                 }
                 else
                 {
                     return SubmitResultVO.Of(ReturnCode.IN_QUEUE, $"排队中，前面还有{currentWaitNumbers}个任务", info.Id)
                         .SetProperty("numberOfQueues", currentWaitNumbers)
-                        .SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, ChannelId);
+                        .SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, channel.GuildId)
+                        .SetProperty(Constants.TASK_PROPERTY_DISCORD_CHANNEL_ID, channel.ChannelId);
                 }
             }
             catch (Exception e)
@@ -453,23 +595,25 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 _taskStoreService.Delete(info.Id);
 
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, "提交失败，系统异常")
-                    .SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, ChannelId);
+                     .SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, channel.GuildId)
+                     .SetProperty(Constants.TASK_PROPERTY_DISCORD_CHANNEL_ID, channel.ChannelId);
             }
         }
 
         /// <summary>
         /// 异步执行任务。
         /// </summary>
+        /// <param name="channel">频道</param>
         /// <param name="info">任务信息</param>
         /// <param name="discordSubmit">Discord提交任务的委托</param>
         /// <returns>异步任务</returns>
-        private async Task ExecuteTaskAsync(TaskInfo info, Func<Task<Message>> discordSubmit)
+        private async Task ExecuteTaskAsync(DiscordChannel channel, TaskInfo info, Func<Task<Message>> discordSubmit)
         {
             try
             {
-                await _semaphoreSlimLock.LockAsync();
+                await channel.SemaphoreSlimLock.LockAsync();
 
-                _runningTasks.TryAdd(info.Id, info);
+                channel.RunningTasks.TryAdd(info.Id, info);
 
                 // 判断当前实例是否可用，尝试最大等待 30s
                 var waitTime = 0;
@@ -617,23 +761,31 @@ namespace Midjourney.Infrastructure.LoadBalancer
             }
             finally
             {
-                _runningTasks.TryRemove(info.Id, out _);
-                _taskFutureMap.TryRemove(info.Id, out _);
+                channel.RunningTasks.TryRemove(info.Id, out _);
+                channel.TaskFutureMap.TryRemove(info.Id, out _);
 
-                _semaphoreSlimLock.Unlock();
+                channel.SemaphoreSlimLock.Unlock();
 
                 SaveAndNotify(info);
             }
         }
 
-        public void AddRunningTask(TaskInfo task)
+        public void AddRunningTask(TaskInfo task, string channelId = null)
         {
-            _runningTasks.TryAdd(task.Id, task);
+            var channel = GetChannel(channelId);
+            if (channel != null)
+            {
+                channel.RunningTasks.TryAdd(task.Id, task);
+            }
         }
 
-        public void RemoveRunningTask(TaskInfo task)
+        public void RemoveRunningTask(TaskInfo task, string channelId = null)
         {
-            _runningTasks.TryRemove(task.Id, out _);
+            var channel = GetChannel(channelId);
+            if (channel != null)
+            {
+                channel.RunningTasks.TryRemove(task.Id, out _);
+            }
         }
 
         /// <summary>
@@ -670,7 +822,14 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <returns>任务信息</returns>
         public TaskInfo GetRunningTask(string id)
         {
-            return GetRunningTasks().FirstOrDefault(t => id == t.Id);
+            foreach (var channel in _channelPool.Values)
+            {
+                if (channel.RunningTasks.TryGetValue(id, out var task))
+                {
+                    return task;
+                }
+            }
+            return null;
         }
 
         /// <summary>
@@ -720,85 +879,109 @@ namespace Midjourney.Infrastructure.LoadBalancer
         {
             try
             {
+                _logger.Information("Discord实例 {GuildId}-{ChannelId} 开始释放资源", Account?.GuildId, Account?.ChannelId);
+
                 // 清除缓存
                 ClearAccountCache(Account?.Id);
 
-                BotMessageListener?.Dispose();
-                WebSocketManager?.Dispose();
-
-                _mre.Set();
+                WebSocketStarter?.CloseSocket();
 
                 // 任务取消
                 _longToken.Cancel();
 
-                // 停止后台任务
-                _mre.Set(); // 解除等待，防止死锁
+                // 清理频道资源
+                foreach (var channel in _channelPool.Values)
+                {
+                    // 通知所有频道的信号控制退出等待
+                    channel.SignalControl.Set();
 
-                // 清理后台任务
-                if (_longTask != null && !_longTask.IsCompleted)
+                    // 释放未完成的任务
+                    foreach (var runningTask in channel.RunningTasks)
+                    {
+                        runningTask.Value.Fail("强制取消");
+                    }
+
+                    // 清理任务队列
+                    while (channel.QueueTasks.TryDequeue(out var taskInfo))
+                    {
+                        taskInfo.Item1.Fail("强制取消");
+                    }
+
+                    // 释放任务映射
+                    foreach (var task in channel.TaskFutureMap.Values)
+                    {
+                        if (!task.IsCompleted)
+                        {
+                            try
+                            {
+                                task.Wait(); // 等待任务完成
+                            }
+                            catch
+                            {
+                                // Ignore exceptions from tasks
+                            }
+                        }
+                    }
+
+                    // 清理资源
+                    channel.Dispose();
+                }
+
+                // 清理后台缓存任务
+                if (_longTaskCache != null && !_longTaskCache.IsCompleted)
                 {
                     try
                     {
-                        _longTask.Wait();
+                        _longTaskCache.Wait();
                     }
                     catch
                     {
-                        // Ignore exceptions from logging task
+                        // Ignore exceptions from cache task
                     }
                 }
 
-                // 释放未完成的任务
-                foreach (var runningTask in _runningTasks)
-                {
-                    runningTask.Value.Fail("强制取消"); // 取消任务（假设TaskInfo有Cancel方法）
-                }
+                _channelPool.Clear();
 
-                // 清理任务队列
-                while (_queueTasks.TryDequeue(out var taskInfo))
-                {
-                    taskInfo.Item1.Fail("强制取消"); // 取消任务（假设TaskInfo有Cancel方法）
-                }
-
-                // 释放信号量
-                _semaphoreSlimLock?.Dispose();
-
-                // 释放信号
-                _mre?.Dispose();
-
-                // 释放任务映射
-                foreach (var task in _taskFutureMap.Values)
-                {
-                    if (!task.IsCompleted)
-                    {
-                        try
-                        {
-                            task.Wait(); // 等待任务完成
-                        }
-                        catch
-                        {
-                            // Ignore exceptions from tasks
-                        }
-                    }
-                }
-
-                // 清理资源
-                _taskFutureMap.Clear();
-                _runningTasks.Clear();
+                _logger.Information("Discord实例 {GuildId}-{ChannelId} 资源释放完成", Account?.GuildId, Account?.ChannelId);
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.Error(ex, "Discord实例 {GuildId}-{ChannelId} 释放资源时发生异常", Account?.GuildId, Account?.ChannelId);
             }
         }
 
         /// <summary>
-        /// 绘画
+        /// 替换通用交互参数
         /// </summary>
-        /// <param name="info"></param>
-        /// <param name="prompt"></param>
-        /// <param name="nonce"></param>
-        /// <returns></returns>
-        public async Task<Message> ImagineAsync(TaskInfo info, string prompt, string nonce)
+        private string ReplaceInteractionParams(string content, string nonce, EBotType? botType = null, string guid = null, string channelId = null)
         {
+            // 使用智能选择逻辑获取频道ID
+            channelId = GetAvailableChannelId(channelId);
+
+            var str = content
+                .Replace("$guild_id", guid ?? Account.GuildId)
+                .Replace("$channel_id", channelId ?? Account.ChannelId)
+                .Replace("$session_id", DefaultSessionId)
+                .Replace("$nonce", nonce);
+
+            if (botType == EBotType.MID_JOURNEY)
+            {
+                str = str.Replace("$application_id", Constants.MJ_APPLICATION_ID);
+            }
+            else if (botType == EBotType.NIJI_JOURNEY)
+            {
+                str = str.Replace("$application_id", Constants.NIJI_APPLICATION_ID);
+            }
+
+            return str;
+        }
+
+        /// <summary>
+        /// imagine 任务
+        /// </summary>
+        public async Task<Message> ImagineAsync(TaskInfo info, string prompt, string nonce, string channelId = null)
+        {
+
             prompt = GetPrompt(prompt, info);
 
             var json = (info.RealBotType ?? info.BotType) == EBotType.MID_JOURNEY ? _paramsMap["imagine"] : _paramsMap["imagineniji"];
@@ -813,16 +996,10 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// 放大
         /// </summary>
-        /// <param name="messageId"></param>
-        /// <param name="index"></param>
-        /// <param name="messageHash"></param>
-        /// <param name="messageFlags"></param>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> UpscaleAsync(string messageId, int index, string messageHash, int messageFlags, string nonce, EBotType botType)
+        public async Task<Message> UpscaleAsync(string messageId, int index, string messageHash, int messageFlags, string nonce, EBotType botType, string channelId = null)
         {
-            string paramsStr = ReplaceInteractionParams(_paramsMap["upscale"], nonce, botType)
+
+            string paramsStr = ReplaceInteractionParams(_paramsMap["upscale"], nonce, botType, null, channelId)
                 .Replace("$message_id", messageId)
                 .Replace("$index", index.ToString())
                 .Replace("$message_hash", messageHash);
@@ -845,16 +1022,10 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// 变化
         /// </summary>
-        /// <param name="messageId"></param>
-        /// <param name="index"></param>
-        /// <param name="messageHash"></param>
-        /// <param name="messageFlags"></param>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> VariationAsync(string messageId, int index, string messageHash, int messageFlags, string nonce, EBotType botType)
+        public async Task<Message> VariationAsync(string messageId, int index, string messageHash, int messageFlags, string nonce, EBotType botType, string channelId = null)
         {
-            string paramsStr = ReplaceInteractionParams(_paramsMap["variation"], nonce, botType)
+
+            string paramsStr = ReplaceInteractionParams(_paramsMap["variation"], nonce, botType, null, channelId)
                 .Replace("$message_id", messageId)
                 .Replace("$index", index.ToString())
                 .Replace("$message_hash", messageHash);
@@ -876,12 +1047,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// 执行动作
         /// </summary>
-        /// <param name="messageId"></param>
-        /// <param name="customId"></param>
-        /// <param name="messageFlags"></param>
-        /// <param name="nonce"></param>
-        /// <param name="info"></param>
-        /// <returns></returns>
         public async Task<Message> ActionAsync(
             string messageId,
             string customId,
@@ -889,11 +1054,12 @@ namespace Midjourney.Infrastructure.LoadBalancer
             string nonce,
             TaskInfo info)
         {
+
             var botType = info.RealBotType ?? info.BotType;
 
             string guid = null;
-            string channelId = null;
-            if (!string.IsNullOrWhiteSpace(info.SubInstanceId))
+            string channelId = info.ChannelId;
+            if (!string.IsNullOrWhiteSpace(info.SubInstanceId) && info.SubInstanceId != channelId)
             {
                 if (Account.SubChannelValues.ContainsKey(info.SubInstanceId))
                 {
@@ -924,12 +1090,151 @@ namespace Midjourney.Infrastructure.LoadBalancer
         }
 
         /// <summary>
+        /// 自定义变焦
+        /// </summary>
+        public async Task<Message> ZoomAsync(TaskInfo info, string messageId, string customId, string prompt, string nonce)
+        {
+
+            customId = customId.Replace("MJ::CustomZoom::", "MJ::OutpaintCustomZoomModal::");
+            prompt = GetPrompt(prompt, info);
+
+            string paramsStr = ReplaceInteractionParams(_paramsMap["zoom"], nonce, info.RealBotType ?? info.BotType, null, info.ChannelId)
+                .Replace("$message_id", messageId);
+
+            var obj = JObject.Parse(paramsStr);
+
+            obj["data"]["custom_id"] = customId;
+            obj["data"]["components"][0]["components"][0]["value"] = prompt;
+
+            paramsStr = obj.ToString();
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
+        /// 图生文 - 生图
+        /// </summary>
+        public async Task<Message> PicReaderAsync(TaskInfo info, string messageId, string customId, string prompt, string nonce, EBotType botType)
+        {
+
+            var index = customId.Split("::").LastOrDefault();
+            prompt = GetPrompt(prompt, info);
+
+            string paramsStr = ReplaceInteractionParams(_paramsMap["picreader"], nonce, botType, null, info.ChannelId)
+                .Replace("$message_id", messageId)
+                .Replace("$index", index);
+
+            var obj = JObject.Parse(paramsStr);
+            obj["data"]["components"][0]["components"][0]["value"] = prompt;
+            paramsStr = obj.ToString();
+
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
+        /// Remix 操作
+        /// </summary>
+        public async Task<Message> RemixAsync(TaskInfo info, TaskAction action, string messageId, string modal, string customId, string prompt, string nonce, EBotType botType)
+        {
+
+            prompt = GetPrompt(prompt, info);
+
+            string paramsStr = ReplaceInteractionParams(_paramsMap["remix"], nonce, botType, null, info.ChannelId)
+                .Replace("$message_id", messageId)
+                .Replace("$custom_id", customId)
+                .Replace("$modal", modal);
+
+            var obj = JObject.Parse(paramsStr);
+            obj["data"]["components"][0]["components"][0]["value"] = prompt;
+            paramsStr = obj.ToString();
+
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
+        /// 执行 info 操作
+        /// </summary>
+        public async Task<Message> InfoAsync(string nonce, EBotType botType)
+        {
+
+            var content = botType == EBotType.MID_JOURNEY ? _paramsMap["info"] : _paramsMap["infoniji"];
+
+            var paramsStr = ReplaceInteractionParams(content, nonce);
+            var obj = JObject.Parse(paramsStr);
+            paramsStr = obj.ToString();
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
+        /// 执行 settings button 操作
+        /// </summary>
+        public async Task<Message> SettingButtonAsync(string nonce, string custom_id, EBotType botType)
+        {
+
+            var paramsStr = ReplaceInteractionParams(_paramsMap["settingbutton"], nonce)
+                .Replace("$custom_id", custom_id);
+
+            if (botType == EBotType.NIJI_JOURNEY)
+            {
+                paramsStr = paramsStr
+                    .Replace("$application_id", Constants.NIJI_APPLICATION_ID)
+                    .Replace("$message_id", Account.NijiSettingsMessageId);
+            }
+            else if (botType == EBotType.MID_JOURNEY)
+            {
+                paramsStr = paramsStr
+                    .Replace("$application_id", Constants.MJ_APPLICATION_ID)
+                    .Replace("$message_id", Account.SettingsMessageId);
+            }
+
+            var obj = JObject.Parse(paramsStr);
+            paramsStr = obj.ToString();
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
+        /// MJ 执行 settings select 操作
+        /// </summary>
+        public async Task<Message> SettingSelectAsync(string nonce, string values)
+        {
+
+            var paramsStr = ReplaceInteractionParams(_paramsMap["settingselect"], nonce)
+              .Replace("$message_id", Account.SettingsMessageId)
+              .Replace("$values", values);
+            var obj = JObject.Parse(paramsStr);
+            paramsStr = obj.ToString();
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
+        /// 执行 setting 操作
+        /// </summary>
+        public async Task<Message> SettingAsync(string nonce, EBotType botType, string channelId = null)
+        {
+
+            var content = botType == EBotType.NIJI_JOURNEY ? _paramsMap["settingniji"] : _paramsMap["setting"];
+
+            var paramsStr = ReplaceInteractionParams(content, nonce, null, channelId);
+
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
+        /// 根据 job id 显示任务信息
+        /// </summary>
+        public async Task<Message> ShowAsync(string jobId, string nonce, EBotType botType, string channelId = null)
+        {
+
+            var content = botType == EBotType.MID_JOURNEY ? _paramsMap["show"] : _paramsMap["showniji"];
+
+            var paramsStr = ReplaceInteractionParams(content, nonce, null, channelId)
+                .Replace("$value", jobId);
+
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
         /// 图片 seed 值
         /// </summary>
-        /// <param name="jobId"></param>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
         public async Task<Message> SeedAsync(string jobId, string nonce, EBotType botType)
         {
             // 私聊频道
@@ -948,8 +1253,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// 图片 seed 值消息
         /// </summary>
-        /// <param name="url"></param>
-        /// <returns></returns>
         public async Task<Message> SeedMessagesAsync(string url)
         {
             try
@@ -987,178 +1290,516 @@ namespace Midjourney.Infrastructure.LoadBalancer
         }
 
         /// <summary>
-        /// 自定义变焦
+        /// 局部重绘
         /// </summary>
-        /// <param name="messageId"></param>
-        /// <param name="customId"></param>
-        /// <param name="prompt"></param>
-        /// <param name="nonce"></param>
-        /// <returns></returns>
-        public async Task<Message> ZoomAsync(TaskInfo info, string messageId, string customId, string prompt, string nonce)
+        public async Task<Message> InpaintAsync(TaskInfo info, string customId, string prompt, string maskBase64)
         {
-            customId = customId.Replace("MJ::CustomZoom::", "MJ::OutpaintCustomZoomModal::");
-            prompt = GetPrompt(prompt, info);
-
-            string paramsStr = ReplaceInteractionParams(_paramsMap["zoom"], nonce, info.RealBotType ?? info.BotType)
-                .Replace("$message_id", messageId);
-            //.Replace("$prompt", prompt);
-
-            var obj = JObject.Parse(paramsStr);
-
-            obj["data"]["custom_id"] = customId;
-            obj["data"]["components"][0]["components"][0]["value"] = prompt;
-
-            paramsStr = obj.ToString();
-            return await PostJsonAndCheckStatusAsync(paramsStr);
-        }
-
-        /// <summary>
-        /// 图生文 - 生图
-        /// </summary>
-        /// <param name="messageId"></param>
-        /// <param name="customId"></param>
-        /// <param name="prompt"></param>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> PicReaderAsync(TaskInfo info, string messageId, string customId, string prompt, string nonce, EBotType botType)
-        {
-            var index = customId.Split("::").LastOrDefault();
-            prompt = GetPrompt(prompt, info);
-
-            string paramsStr = ReplaceInteractionParams(_paramsMap["picreader"], nonce, botType)
-                .Replace("$message_id", messageId)
-                .Replace("$index", index);
-
-            var obj = JObject.Parse(paramsStr);
-            obj["data"]["components"][0]["components"][0]["value"] = prompt;
-            paramsStr = obj.ToString();
-
-            return await PostJsonAndCheckStatusAsync(paramsStr);
-        }
-
-        /// <summary>
-        /// Remix 操作
-        /// </summary>
-        /// <param name="action"></param>
-        /// <param name="messageId"></param>
-        /// <param name="modal"></param>
-        /// <param name="customId"></param>
-        /// <param name="prompt"></param>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> RemixAsync(TaskInfo info, TaskAction action, string messageId, string modal, string customId, string prompt, string nonce, EBotType botType)
-        {
-            prompt = GetPrompt(prompt, info);
-
-            string paramsStr = ReplaceInteractionParams(_paramsMap["remix"], nonce, botType)
-                .Replace("$message_id", messageId)
-                .Replace("$custom_id", customId)
-                .Replace("$modal", modal);
-
-            var obj = JObject.Parse(paramsStr);
-            obj["data"]["components"][0]["components"][0]["value"] = prompt;
-            paramsStr = obj.ToString();
-
-            return await PostJsonAndCheckStatusAsync(paramsStr);
-        }
-
-        /// <summary>
-        /// 执行 info 操作
-        /// </summary>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> InfoAsync(string nonce, EBotType botType)
-        {
-            var content = botType == EBotType.MID_JOURNEY ? _paramsMap["info"] : _paramsMap["infoniji"];
-
-            var paramsStr = ReplaceInteractionParams(content, nonce);
-            var obj = JObject.Parse(paramsStr);
-            paramsStr = obj.ToString();
-            return await PostJsonAndCheckStatusAsync(paramsStr);
-        }
-
-        /// <summary>
-        /// 执行 settings button 操作
-        /// </summary>
-        /// <param name="nonce"></param>
-        /// <param name="custom_id"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> SettingButtonAsync(string nonce, string custom_id, EBotType botType)
-        {
-            var paramsStr = ReplaceInteractionParams(_paramsMap["settingbutton"], nonce)
-                .Replace("$custom_id", custom_id);
-
-            if (botType == EBotType.NIJI_JOURNEY)
+            try
             {
-                paramsStr = paramsStr
-                    .Replace("$application_id", Constants.NIJI_APPLICATION_ID)
-                    .Replace("$message_id", Account.NijiSettingsMessageId);
+                prompt = GetPrompt(prompt, info);
+
+                customId = customId?.Replace("MJ::iframe::", "");
+
+                // mask.replace(/^data:.+?;base64,/, ''),
+                maskBase64 = maskBase64?.Replace("data:image/png;base64,", "");
+
+                var obj = new
+                {
+                    customId = customId,
+                    //full_prompt = null,
+                    mask = maskBase64,
+                    prompt = prompt,
+                    userId = "0",
+                    username = "0",
+                };
+                var paramsStr = Newtonsoft.Json.JsonConvert.SerializeObject(obj);
+
+                // NIJI 也是这个链接
+                var response = await PostJsonAsync("https://936929561302675456.discordsays.com/inpaint/api/submit-job",
+                    paramsStr);
+
+                if (response.StatusCode == System.Net.HttpStatusCode.OK)
+                {
+                    return Message.Success();
+                }
+
+                return Message.Of((int)response.StatusCode, "提交失败");
             }
-            else if (botType == EBotType.MID_JOURNEY)
+            catch (HttpRequestException e)
             {
-                paramsStr = paramsStr
-                    .Replace("$application_id", Constants.MJ_APPLICATION_ID)
-                    .Replace("$message_id", Account.SettingsMessageId);
+                _logger.Error(e, "局部重绘请求执行异常 {@0}", info);
+
+                return Message.Of(ReturnCode.FAILURE, e.Message?.Substring(0, Math.Min(e.Message.Length, 100)) ?? "未知错误");
+            }
+        }
+
+        /// <summary>
+        /// 重新生成
+        /// </summary>
+        public async Task<Message> RerollAsync(string messageId, string messageHash, int messageFlags, string nonce, EBotType botType, string channelId = null)
+        {
+
+            string paramsStr = ReplaceInteractionParams(_paramsMap["reroll"], nonce, botType, null, channelId)
+                .Replace("$message_id", messageId)
+                .Replace("$message_hash", messageHash);
+            var obj = JObject.Parse(paramsStr);
+
+            if (obj.ContainsKey("message_flags"))
+            {
+                obj["message_flags"] = messageFlags;
+            }
+            else
+            {
+                obj.Add("message_flags", messageFlags);
             }
 
+            paramsStr = obj.ToString();
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
+        /// 解析描述
+        /// </summary>
+        public async Task<Message> DescribeAsync(string finalFileName, string nonce, EBotType botType, string channelId = null)
+        {
+
+            string fileName = finalFileName.Substring(finalFileName.LastIndexOf("/") + 1);
+
+            var json = botType == EBotType.NIJI_JOURNEY ? _paramsMap["describeniji"] : _paramsMap["describe"];
+            string paramsStr = ReplaceInteractionParams(json, nonce, null, channelId)
+                .Replace("$file_name", fileName)
+                .Replace("$final_file_name", finalFileName);
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
+        /// 解析描述
+        /// </summary>
+        public async Task<Message> DescribeByLinkAsync(string link, string nonce, EBotType botType, string channelId = null)
+        {
+
+            var json = botType == EBotType.NIJI_JOURNEY ? _paramsMap["describenijilink"] : _paramsMap["describelink"];
+            string paramsStr = ReplaceInteractionParams(json, nonce, null, channelId)
+                .Replace("$link", link);
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
+        /// 上传一个较长的提示词，mj 可以返回一组简要的提示词
+        /// </summary>
+        public async Task<Message> ShortenAsync(TaskInfo info, string prompt, string nonce, EBotType botType, string channelId = null)
+        {
+
+            prompt = GetPrompt(prompt, info);
+
+            var json = botType == EBotType.MID_JOURNEY || prompt.Contains("--niji") ? _paramsMap["shorten"] : _paramsMap["shortenniji"];
+            var paramsStr = ReplaceInteractionParams(json, nonce, null, info.ChannelId);
+
+            var obj = JObject.Parse(paramsStr);
+            obj["data"]["options"][0]["value"] = prompt;
+            paramsStr = obj.ToString();
+
+            return await PostJsonAndCheckStatusAsync(paramsStr);
+        }
+
+        /// <summary>
+        /// 合成
+        /// </summary>
+        public async Task<Message> BlendAsync(List<string> finalFileNames, BlendDimensions dimensions, string nonce, EBotType botType, string channelId = null)
+        {
+
+            var json = botType == EBotType.MID_JOURNEY || GlobalConfiguration.Setting.EnableConvertNijiToMj ? _paramsMap["blend"] : _paramsMap["blendniji"];
+
+            string paramsStr = ReplaceInteractionParams(json, nonce, null, channelId);
+            JObject paramsJson = JObject.Parse(paramsStr);
+            JArray options = (JArray)paramsJson["data"]["options"];
+            JArray attachments = (JArray)paramsJson["data"]["attachments"];
+            for (int i = 0; i < finalFileNames.Count; i++)
+            {
+                string finalFileName = finalFileNames[i];
+                string fileName = finalFileName.Substring(finalFileName.LastIndexOf("/") + 1);
+                JObject attachment = new JObject
+                {
+                    ["id"] = i.ToString(),
+                    ["filename"] = fileName,
+                    ["uploaded_filename"] = finalFileName
+                };
+                attachments.Add(attachment);
+                JObject option = new JObject
+                {
+                    ["type"] = 11,
+                    ["name"] = $"image{i + 1}",
+                    ["value"] = i
+                };
+                options.Add(option);
+            }
+            options.Add(new JObject
+            {
+                ["type"] = 3,
+                ["name"] = "dimensions",
+                ["value"] = $"--ar {dimensions.GetValue()}"
+            });
+            return await PostJsonAndCheckStatusAsync(paramsJson.ToString());
+        }
+
+        /// <summary>
+        /// 发送PUT文件
+        /// </summary>
+        private async Task PutFileAsync(string uploadUrl, DataUrl dataUrl)
+        {
+            uploadUrl = _discordHelper.GetDiscordUploadUrl(uploadUrl);
+            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Put, uploadUrl)
+            {
+                Content = new ByteArrayContent(dataUrl.Data)
+            };
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue(dataUrl.MimeType);
+            request.Content.Headers.ContentLength = dataUrl.Data.Length;
+            request.Headers.UserAgent.ParseAdd(Account.UserAgent);
+            await _httpClient.SendAsync(request);
+        }
+
+        /// <summary>
+        /// 发送POST请求
+        /// </summary>
+        private async Task<HttpResponseMessage> PostJsonAsync(string url, string paramsStr)
+        {
+            _logger.Debug("PostJsonAsync url = {@0}, paramsStr = {@1}", url, paramsStr);
+            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(paramsStr, Encoding.UTF8, "application/json")
+            };
+
+            request.Headers.UserAgent.ParseAdd(Account.UserAgent);
+
+            // 设置 request Authorization 为 UserToken，不需要 Bearer 前缀
+            request.Headers.Add("Authorization", Account.UserToken);
+
+            return await _httpClient.SendAsync(request);
+        }
+
+        /// <summary>
+        /// 发送POST请求并检查状态
+        /// </summary>
+        private async Task<Message> PostJsonAndCheckStatusAsync(string paramsStr)
+        {
+            // 如果 TooManyRequests 请求失败，则重拾最多 3 次
+            var count = 5;
+
+            // 已处理的 message id
+            var messageIds = new List<string>();
+            do
+            {
+                HttpResponseMessage response = null;
+                try
+                {
+                    response = await PostJsonAsync(_discordInteractionUrl, paramsStr);
+                    if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+                    {
+                        return Message.Success();
+                    }
+                    else if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                    {
+                        count--;
+                        if (count > 0)
+                        {
+                            // 等待 3~6 秒
+                            var random = new Random();
+                            var seconds = random.Next(3, 6);
+                            await Task.Delay(seconds * 1000);
+
+                            _logger.Warning("Http 请求执行频繁，等待重试 {@0}, {@1}, {@2}", paramsStr, response.StatusCode, response.Content);
+                            continue;
+                        }
+                    }
+                    else if (response.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        count--;
+
+                        if (count > 0)
+                        {
+                            // 等待 3~6 秒
+                            var random = new Random();
+                            var seconds = random.Next(3, 6);
+                            await Task.Delay(seconds * 1000);
+
+                            // 当是 NotFound 时
+                            // 可能是 message id 错乱导致
+                            if (paramsStr.Contains("message_id") && paramsStr.Contains("nonce"))
+                            {
+                                var obj = JObject.Parse(paramsStr);
+                                if (obj.ContainsKey("message_id") && obj.ContainsKey("nonce"))
+                                {
+                                    var nonce = obj["nonce"].ToString();
+                                    var message_id = obj["message_id"].ToString();
+                                    if (!string.IsNullOrEmpty(nonce) && !string.IsNullOrWhiteSpace(message_id))
+                                    {
+                                        messageIds.Add(message_id);
+
+                                        var t = GetRunningTaskByNonce(nonce);
+                                        if (t != null && !string.IsNullOrWhiteSpace(t.ParentId))
+                                        {
+                                            var p = GetTask(t.ParentId);
+                                            if (p != null)
+                                            {
+                                                var newMessageId = p.MessageIds.Where(c => !messageIds.Contains(c)).FirstOrDefault();
+                                                if (!string.IsNullOrWhiteSpace(newMessageId))
+                                                {
+                                                    obj["message_id"] = newMessageId;
+
+                                                    var oldStr = paramsStr;
+                                                    paramsStr = obj.ToString();
+
+                                                    _logger.Warning("Http 可能消息错乱，等待重试 {@0}, {@1}, {@2}, {@3}", oldStr, paramsStr, response.StatusCode, response.Content);
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // _logger.Error("Http 请求执行失败 {@0}, {@1}, {@2}", paramsStr, response.StatusCode, response.Content);
+                    // 正确读取响应内容
+                    string responseBody = await response.Content.ReadAsStringAsync();
+                    _logger.Error(
+                        "Http 请求执行失败 | 参数: {Params} | 状态码: {StatusCode} | 响应内容: {Content}",
+                        paramsStr,
+                        (int)response.StatusCode,
+                        responseBody);
+
+                    var error = $"{response.StatusCode}: {paramsStr.Substring(0, Math.Min(paramsStr.Length, 1000))}";
+
+                    // 如果是 403 则直接禁用账号
+                    if (response.StatusCode == HttpStatusCode.Forbidden)
+                    {
+                        _logger.Error("Http 请求没有操作权限，禁用账号 {@0}", paramsStr);
+
+                        Account.Enable = false;
+                        Account.DisabledReason = "Http 请求没有操作权限，禁用账号";
+                        DbHelper.Instance.AccountStore.Update(Account);
+                        ClearAccountCache(Account.Id);
+
+                        return Message.Of(ReturnCode.FAILURE, "请求失败，禁用账号");
+                    }
+
+                    return Message.Of((int)response.StatusCode, error);
+                }
+                catch (HttpRequestException e)
+                {
+                    _logger.Error(e, "Http 请求执行异常 {@0}", paramsStr);
+
+                    return Message.Of(ReturnCode.FAILURE, e.Message?.Substring(0, Math.Min(e.Message.Length, 100)) ?? "未知错误");
+                }
+            } while (true);
+        }
+
+        /// <summary>
+        /// 发送DELETE请求到指定URL
+        /// </summary>
+        /// <param name="url">请求URL</param>
+        /// <returns>HTTP响应消息</returns>
+        private async Task<HttpResponseMessage> DeleteAsync(string url)
+        {
+            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Delete, url);
+
+            // 添加请求头
+            request.Headers.UserAgent.ParseAdd(Account.UserAgent);
+            // 设置 request Authorization 为 UserToken，不需要 Bearer 前缀
+            request.Headers.Add("Authorization", Account.UserToken);
+
+            // 发送请求
+            return await _httpClient.SendAsync(request);
+        }
+
+        /// <summary>
+        /// 缓存处理
+        /// </summary>
+        private void RuningCache()
+        {
+            while (true)
+            {
+                if (_longToken.Token.IsCancellationRequested)
+                {
+                    // 清理资源（如果需要）
+                    break;
+                }
+
+                try
+                {
+                    // 当前时间转为 Unix 时间戳
+                    // 今日 0 点 Unix 时间戳
+                    var now = new DateTimeOffset(DateTime.Now.Date).ToUnixTimeMilliseconds();
+                    var count = (int)DbHelper.Instance.TaskStore.Count(c => c.SubmitTime >= now && c.InstanceId == Account.ChannelId);
+
+                    if (Account.DayDrawCount != count)
+                    {
+                        Account.DayDrawCount = count;
+
+                        DbHelper.Instance.AccountStore.Update("DayDrawCount", Account);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Error(ex, "RuningCache 异常");
+                }
+
+                // 每 2 分钟执行一次
+                Thread.Sleep(60 * 1000 * 2);
+            }
+        }
+
+        /// <summary>
+        /// 全局切换 fast 模式
+        /// </summary>
+        /// <param name="nonce"></param>
+        /// <param name="botType"></param>
+        /// <param name="channelId">频道ID</param>
+        /// <returns></returns>
+        public async Task<Message> FastAsync(string nonce, EBotType botType, string channelId = null)
+        {
+
+            if (botType == EBotType.NIJI_JOURNEY && Account.EnableNiji != true)
+            {
+                return Message.Success("忽略提交，未开启 niji");
+            }
+
+            if (botType == EBotType.MID_JOURNEY && Account.EnableMj != true)
+            {
+                return Message.Success("忽略提交，未开启 mj");
+            }
+
+            var json = botType == EBotType.MID_JOURNEY ? _paramsMap["fast"] : _paramsMap["fastniji"];
+            var paramsStr = ReplaceInteractionParams(json, nonce, null, channelId);
             var obj = JObject.Parse(paramsStr);
             paramsStr = obj.ToString();
             return await PostJsonAndCheckStatusAsync(paramsStr);
         }
 
         /// <summary>
-        /// MJ 执行 settings select 操作
+        /// 全局切换 relax 模式
         /// </summary>
         /// <param name="nonce"></param>
-        /// <param name="values"></param>
+        /// <param name="botType"></param>
+        /// <param name="channelId">频道ID</param>
         /// <returns></returns>
-        public async Task<Message> SettingSelectAsync(string nonce, string values)
+        public async Task<Message> RelaxAsync(string nonce, EBotType botType, string channelId = null)
         {
-            var paramsStr = ReplaceInteractionParams(_paramsMap["settingselect"], nonce)
-              .Replace("$message_id", Account.SettingsMessageId)
-              .Replace("$values", values);
+
+            if (botType == EBotType.NIJI_JOURNEY && Account.EnableNiji != true)
+            {
+                return Message.Success("忽略提交，未开启 niji");
+            }
+
+            if (botType == EBotType.MID_JOURNEY && Account.EnableMj != true)
+            {
+                return Message.Success("忽略提交，未开启 mj");
+            }
+
+            var json = botType == EBotType.NIJI_JOURNEY ? _paramsMap["relax"] : _paramsMap["relaxniji"];
+            var paramsStr = ReplaceInteractionParams(json, nonce, null, channelId);
             var obj = JObject.Parse(paramsStr);
             paramsStr = obj.ToString();
             return await PostJsonAndCheckStatusAsync(paramsStr);
         }
 
         /// <summary>
-        /// 执行 setting 操作
+        /// 全局切换快速模式检查
         /// </summary>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
         /// <returns></returns>
-        public async Task<Message> SettingAsync(string nonce, EBotType botType)
+        public async Task RelaxToFastValidate()
         {
-            var content = botType == EBotType.NIJI_JOURNEY ? _paramsMap["settingniji"] : _paramsMap["setting"];
+            try
+            {
+                // 快速用完时
+                // 并且开启快速切换慢速模式时
+                if (Account != null && Account.FastExhausted && Account.EnableRelaxToFast == true)
+                {
+                    // 每 6~12 小时，和启动时检查账号是否有快速时长
+                    await RandomSyncInfo();
 
-            var paramsStr = ReplaceInteractionParams(content, nonce);
+                    // 判断 info 检查时间是否在 5 分钟内
+                    if (Account.InfoUpdated != null && Account.InfoUpdated.Value.AddMinutes(5) >= DateTime.Now)
+                    {
+                        _logger.Information("自动切换快速模式，验证 {@0} - {@1}", Account.GuildId, Account.ChannelId);
 
-            //var obj = JObject.Parse(paramsStr);
-            //paramsStr = obj.ToString();
+                        // 提取 fastime
+                        // 如果检查完之后，快速超过 1 小时，则标记为快速未用完
+                        var fastTime = Account.FastTimeRemaining?.ToString()?.Split('/')?.FirstOrDefault()?.Trim();
+                        if (!string.IsNullOrWhiteSpace(fastTime) && double.TryParse(fastTime, out var ftime) && ftime >= 1)
+                        {
+                            _logger.Information("自动切换快速模式，开始 {@0} - {@1}", Account.GuildId, Account.ChannelId);
 
-            return await PostJsonAndCheckStatusAsync(paramsStr);
+                            // 标记未用完快速
+                            Account.FastExhausted = false;
+                            DbHelper.Instance.AccountStore.Update("FastExhausted", Account);
+
+                            // 如果开启了自动切换到快速，则自动切换到快速
+                            try
+                            {
+                                if (Account.EnableRelaxToFast == true)
+                                {
+                                    Thread.Sleep(2500);
+                                    await FastAsync(SnowFlake.NextId(), EBotType.MID_JOURNEY);
+
+                                    Thread.Sleep(2500);
+                                    await FastAsync(SnowFlake.NextId(), EBotType.NIJI_JOURNEY);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.Error(ex, "自动切换快速模式，执行异常 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+                            }
+
+                            ClearAccountCache(Account.Id);
+
+                            _logger.Information("自动切换快速模式，执行完成 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "快速切换慢速模式，检查执行异常 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+            }
         }
 
         /// <summary>
-        /// 根据 job id 显示任务信息
+        /// 随机 6-12 小时 同步一次账号信息
         /// </summary>
-        /// <param name="jobId"></param>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
         /// <returns></returns>
-        public async Task<Message> ShowAsync(string jobId, string nonce, EBotType botType)
+        public async Task RandomSyncInfo()
         {
-            var content = botType == EBotType.MID_JOURNEY ? _paramsMap["show"] : _paramsMap["showniji"];
+            // 每 6~12 小时
+            if (Account.InfoUpdated == null || Account.InfoUpdated.Value.AddMinutes(5) < DateTime.Now)
+            {
+                var key = $"fast_exhausted_{Account.Id}";
+                await _cache.GetOrCreateAsync(key, async c =>
+                {
+                    try
+                    {
+                        _logger.Information("随机同步账号信息开始 {@0} - {@1}", Account.GuildId, Account.ChannelId);
 
-            var paramsStr = ReplaceInteractionParams(content, nonce)
-                .Replace("$value", jobId);
+                        // 随机 6~12 小时
+                        var random = new Random();
+                        var minutes = random.Next(360, 600);
+                        c.SetAbsoluteExpiration(TimeSpan.FromMinutes(minutes));
 
-            return await PostJsonAndCheckStatusAsync(paramsStr);
+                        await _taskService.InfoSetting(Account.Id);
+
+                        _logger.Information("随机同步账号信息完成 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Error(ex, "随机同步账号信息异常 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+                    }
+
+                    return false;
+                });
+            }
         }
 
         /// <summary>
@@ -1276,9 +1917,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 }
             }
 
-            //// 处理转义字符引号等
-            //return prompt.Replace("\\\"", "\"").Replace("\\'", "'").Replace("\\\\", "\\");
-
             prompt = FormatUrls(prompt).ConfigureAwait(false).GetAwaiter().GetResult();
 
             return prompt;
@@ -1373,216 +2011,12 @@ namespace Midjourney.Infrastructure.LoadBalancer
         }
 
         /// <summary>
-        /// 局部重绘
+        /// 上传
         /// </summary>
-        /// <param name="customId"></param>
-        /// <param name="prompt"></param>
-        /// <param name="maskBase64"></param>
-        /// <returns></returns>
-        public async Task<Message> InpaintAsync(TaskInfo info, string customId, string prompt, string maskBase64)
+        public async Task<Message> UploadAsync(string fileName, DataUrl dataUrl, bool useDiscordUpload = false, string channelId = null)
         {
-            try
-            {
-                prompt = GetPrompt(prompt, info);
+            channelId = GetAvailableChannelId(channelId);
 
-                customId = customId?.Replace("MJ::iframe::", "");
-
-                // mask.replace(/^data:.+?;base64,/, ''),
-                maskBase64 = maskBase64?.Replace("data:image/png;base64,", "");
-
-                var obj = new
-                {
-                    customId = customId,
-                    //full_prompt = null,
-                    mask = maskBase64,
-                    prompt = prompt,
-                    userId = "0",
-                    username = "0",
-                };
-                var paramsStr = Newtonsoft.Json.JsonConvert.SerializeObject(obj);
-
-                // NIJI 也是这个链接
-                var response = await PostJsonAsync("https://936929561302675456.discordsays.com/inpaint/api/submit-job",
-                    paramsStr);
-
-                if (response.StatusCode == System.Net.HttpStatusCode.OK)
-                {
-                    return Message.Success();
-                }
-
-                return Message.Of((int)response.StatusCode, "提交失败");
-            }
-            catch (HttpRequestException e)
-            {
-                _logger.Error(e, "局部重绘请求执行异常 {@0}", info);
-
-                return Message.Of(ReturnCode.FAILURE, e.Message?.Substring(0, Math.Min(e.Message.Length, 100)) ?? "未知错误");
-            }
-        }
-
-        /// <summary>
-        /// 重新生成
-        /// </summary>
-        /// <param name="messageId"></param>
-        /// <param name="messageHash"></param>
-        /// <param name="messageFlags"></param>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> RerollAsync(string messageId, string messageHash, int messageFlags, string nonce, EBotType botType)
-        {
-            string paramsStr = ReplaceInteractionParams(_paramsMap["reroll"], nonce, botType)
-                .Replace("$message_id", messageId)
-                .Replace("$message_hash", messageHash);
-            var obj = JObject.Parse(paramsStr);
-
-            if (obj.ContainsKey("message_flags"))
-            {
-                obj["message_flags"] = messageFlags;
-            }
-            else
-            {
-                obj.Add("message_flags", messageFlags);
-            }
-
-            paramsStr = obj.ToString();
-            return await PostJsonAndCheckStatusAsync(paramsStr);
-        }
-
-        /// <summary>
-        /// 解析描述
-        /// </summary>
-        /// <param name="finalFileName"></param>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> DescribeAsync(string finalFileName, string nonce, EBotType botType)
-        {
-            string fileName = finalFileName.Substring(finalFileName.LastIndexOf("/") + 1);
-
-            var json = botType == EBotType.NIJI_JOURNEY ? _paramsMap["describeniji"] : _paramsMap["describe"];
-            string paramsStr = ReplaceInteractionParams(json, nonce)
-                .Replace("$file_name", fileName)
-                .Replace("$final_file_name", finalFileName);
-            return await PostJsonAndCheckStatusAsync(paramsStr);
-        }
-
-        /// <summary>
-        /// 解析描述
-        /// </summary>
-        /// <param name="link"></param>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> DescribeByLinkAsync(string link, string nonce, EBotType botType)
-        {
-            var json = botType == EBotType.NIJI_JOURNEY ? _paramsMap["describenijilink"] : _paramsMap["describelink"];
-            string paramsStr = ReplaceInteractionParams(json, nonce)
-                .Replace("$link", link);
-            return await PostJsonAndCheckStatusAsync(paramsStr);
-        }
-
-        /// <summary>
-        /// 上传一个较长的提示词，mj 可以返回一组简要的提示词
-        /// </summary>
-        /// <param name="prompt"></param>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> ShortenAsync(TaskInfo info, string prompt, string nonce, EBotType botType)
-        {
-            prompt = GetPrompt(prompt, info);
-
-            var json = botType == EBotType.MID_JOURNEY || prompt.Contains("--niji") ? _paramsMap["shorten"] : _paramsMap["shortenniji"];
-            var paramsStr = ReplaceInteractionParams(json, nonce);
-
-            var obj = JObject.Parse(paramsStr);
-            obj["data"]["options"][0]["value"] = prompt;
-            paramsStr = obj.ToString();
-
-            return await PostJsonAndCheckStatusAsync(paramsStr);
-        }
-
-        /// <summary>
-        /// 合成
-        /// </summary>
-        /// <param name="finalFileNames"></param>
-        /// <param name="dimensions"></param>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> BlendAsync(List<string> finalFileNames, BlendDimensions dimensions, string nonce, EBotType botType)
-        {
-            var json = botType == EBotType.MID_JOURNEY || GlobalConfiguration.Setting.EnableConvertNijiToMj ? _paramsMap["blend"] : _paramsMap["blendniji"];
-
-            string paramsStr = ReplaceInteractionParams(json, nonce);
-            JObject paramsJson = JObject.Parse(paramsStr);
-            JArray options = (JArray)paramsJson["data"]["options"];
-            JArray attachments = (JArray)paramsJson["data"]["attachments"];
-            for (int i = 0; i < finalFileNames.Count; i++)
-            {
-                string finalFileName = finalFileNames[i];
-                string fileName = finalFileName.Substring(finalFileName.LastIndexOf("/") + 1);
-                JObject attachment = new JObject
-                {
-                    ["id"] = i.ToString(),
-                    ["filename"] = fileName,
-                    ["uploaded_filename"] = finalFileName
-                };
-                attachments.Add(attachment);
-                JObject option = new JObject
-                {
-                    ["type"] = 11,
-                    ["name"] = $"image{i + 1}",
-                    ["value"] = i
-                };
-                options.Add(option);
-            }
-            options.Add(new JObject
-            {
-                ["type"] = 3,
-                ["name"] = "dimensions",
-                ["value"] = $"--ar {dimensions.GetValue()}"
-            });
-            return await PostJsonAndCheckStatusAsync(paramsJson.ToString());
-        }
-
-        private string ReplaceInteractionParams(string paramsStr, string nonce,
-            string guid = null, string channelId = null)
-        {
-            return paramsStr.Replace("$guild_id", guid ?? Account.GuildId)
-                .Replace("$channel_id", channelId ?? Account.ChannelId)
-                .Replace("$session_id", DefaultSessionId)
-                .Replace("$nonce", nonce);
-        }
-
-        private string ReplaceInteractionParams(string paramsStr, string nonce, EBotType botType,
-            string guid = null, string channelId = null)
-        {
-            var str = ReplaceInteractionParams(paramsStr, nonce, guid, channelId);
-
-            if (botType == EBotType.MID_JOURNEY)
-            {
-                str = str.Replace("$application_id", Constants.MJ_APPLICATION_ID);
-            }
-            else if (botType == EBotType.NIJI_JOURNEY)
-            {
-                str = str.Replace("$application_id", Constants.NIJI_APPLICATION_ID);
-            }
-
-            return str;
-        }
-
-
-        /// <summary>
-        /// 上传文件到 Discord 或 文件存储
-        /// </summary>
-        /// <param name="fileName"></param>
-        /// <param name="dataUrl"></param>
-        /// <param name="useDiscordUpload"></param>
-        /// <returns></returns>
-        public async Task<Message> UploadAsync(string fileName, DataUrl dataUrl, bool useDiscordUpload = false)
-        {
             // 保存用户上传的 base64 到文件存储
             if (GlobalConfiguration.Setting.EnableSaveUserUploadBase64 && !useDiscordUpload)
             {
@@ -1628,7 +2062,9 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     {
                         ["files"] = new JArray { fileObj }
                     };
-                    HttpResponseMessage response = await PostJsonAsync(_discordAttachmentUrl, paramsJson.ToString());
+
+                    var discordAttachmentUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channelId}/attachments";
+                    HttpResponseMessage response = await PostJsonAsync(discordAttachmentUrl, paramsJson.ToString());
                     if (response.StatusCode != System.Net.HttpStatusCode.OK)
                     {
                         _logger.Error("上传图片到discord失败, status: {StatusCode}, msg: {Body}", response.StatusCode, await response.Content.ReadAsStringAsync());
@@ -1655,15 +2091,19 @@ namespace Midjourney.Infrastructure.LoadBalancer
             }
         }
 
-        public async Task<Message> SendImageMessageAsync(string content, string finalFileName)
+        public async Task<Message> SendImageMessageAsync(string content, string finalFileName, string channelId = null)
         {
+            channelId = GetAvailableChannelId(channelId);
+
             string fileName = finalFileName.Substring(finalFileName.LastIndexOf("/") + 1);
             string paramsStr = _paramsMap["message"]
                 .Replace("$content", content)
-                .Replace("$channel_id", Account.ChannelId)
+                .Replace("$channel_id", channelId)
                 .Replace("$file_name", fileName)
                 .Replace("$final_file_name", finalFileName);
-            HttpResponseMessage response = await PostJsonAsync(_discordMessageUrl, paramsStr);
+
+            var discordMessageUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channelId}/messages";
+            HttpResponseMessage response = await PostJsonAsync(discordMessageUrl, paramsStr);
             if (response.StatusCode != System.Net.HttpStatusCode.OK)
             {
                 _logger.Error("发送图片消息到discord失败, status: {StatusCode}, msg: {Body}", response.StatusCode, await response.Content.ReadAsStringAsync());
@@ -1681,17 +2121,21 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// 自动读 discord 最后一条消息（设置为已读）
         /// </summary>
-        /// <param name="lastMessageId"></param>
+        /// <param name="lastMessageId">最后一条消息ID</param>
+        /// <param name="channelId">频道ID</param>
         /// <returns></returns>
-        public async Task<Message> ReadMessageAsync(string lastMessageId)
+        public async Task<Message> ReadMessageAsync(string lastMessageId, string channelId = null)
         {
+            channelId = GetAvailableChannelId(channelId);
+
             if (string.IsNullOrWhiteSpace(lastMessageId))
             {
                 return Message.Of(ReturnCode.VALIDATION_ERROR, "lastMessageId 不能为空");
             }
 
             var paramsStr = @"{""token"":null,""last_viewed"":3496}";
-            var url = $"{_discordMessageUrl}/{lastMessageId}/ack";
+            var discordMessageUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channelId}/messages";
+            var url = $"{discordMessageUrl}/{lastMessageId}/ack";
 
             HttpResponseMessage response = await PostJsonAsync(url, paramsStr);
             if (response.StatusCode != HttpStatusCode.OK)
@@ -1706,15 +2150,19 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// 删除Discord消息
         /// </summary>
         /// <param name="messageId">消息ID</param>
+        /// <param name="channelId">频道ID</param>
         /// <returns>删除结果</returns>
-        public async Task<Message> DeleteMessageAsync(string messageId)
+        public async Task<Message> DeleteMessageAsync(string messageId, string channelId = null)
         {
+            channelId = GetAvailableChannelId(channelId);
+
             if (string.IsNullOrWhiteSpace(messageId))
             {
                 return Message.Of(ReturnCode.VALIDATION_ERROR, "messageId 不能为空");
             }
 
-            var url = $"{_discordMessageUrl}/{messageId}";
+            var discordMessageUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channelId}/messages";
+            var url = $"{discordMessageUrl}/{messageId}";
 
             try
             {
@@ -1736,303 +2184,238 @@ namespace Midjourney.Infrastructure.LoadBalancer
         }
 
         /// <summary>
-        /// 发送DELETE请求到指定URL
+        /// 获取带前缀的 token
         /// </summary>
-        /// <param name="url">请求URL</param>
-        /// <returns>HTTP响应消息</returns>
-        private async Task<HttpResponseMessage> DeleteAsync(string url)
+        /// <returns>带前缀的 token</returns>
+        public string GetPrefixedToken()
         {
-            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Delete, url);
-
-            // 添加请求头
-            request.Headers.UserAgent.ParseAdd(Account.UserAgent);
-            // 设置 request Authorization 为 UserToken，不需要 Bearer 前缀
-            request.Headers.Add("Authorization", Account.UserToken);
-
-            // 发送请求
-            return await _httpClient.SendAsync(request);
-        }
-        private async Task PutFileAsync(string uploadUrl, DataUrl dataUrl)
-        {
-            uploadUrl = _discordHelper.GetDiscordUploadUrl(uploadUrl);
-            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Put, uploadUrl)
+            if (!string.IsNullOrEmpty(Account.BotToken))
             {
-                Content = new ByteArrayContent(dataUrl.Data)
-            };
-            request.Content.Headers.ContentType = new MediaTypeHeaderValue(dataUrl.MimeType);
-            request.Content.Headers.ContentLength = dataUrl.Data.Length;
-            request.Headers.UserAgent.ParseAdd(Account.UserAgent);
-            await _httpClient.SendAsync(request);
+                return $"Bot {Account.BotToken}";
+            }
+            return Account.UserToken;
         }
 
-        private async Task<HttpResponseMessage> PostJsonAsync(string url, string paramsStr)
+        /// <summary>
+        /// 更新频道池
+        /// </summary>
+        /// <param name="newChannelIds">新的频道ID列表</param>
+        public void UpdateChannelPool(List<string> newChannelIds)
         {
-            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, url)
+            if (newChannelIds == null)
+                return;
+
+            _logger.Information("开始更新频道池，当前频道数：{0}，新频道数：{1}", _channelPool.Count, newChannelIds.Count);
+
+            // 找出需要添加的频道
+            var channelsToAdd = newChannelIds.Where(id => !string.IsNullOrWhiteSpace(id) && !_channelPool.ContainsKey(id)).ToList();
+
+            // 找出需要移除的频道
+            var channelsToRemove = _channelPool.Keys.Where(id => !newChannelIds.Contains(id) && id != _primaryChannelId).ToList();
+
+            // 处理需要移除的频道
+            foreach (var channelId in channelsToRemove)
             {
-                Content = new StringContent(paramsStr, Encoding.UTF8, "application/json")
-            };
+                RemoveChannel(channelId);
+            }
 
-            request.Headers.UserAgent.ParseAdd(Account.UserAgent);
+            // 处理需要添加的频道
+            foreach (var channelId in channelsToAdd)
+            {
+                AddChannel(channelId);
+            }
 
-            // 设置 request Authorization 为 UserToken，不需要 Bearer 前缀
-            request.Headers.Add("Authorization", Account.UserToken);
-
-            return await _httpClient.SendAsync(request);
+            _logger.Information("频道池更新完成，当前频道数：{0}", _channelPool.Count);
         }
 
-        private async Task<Message> PostJsonAndCheckStatusAsync(string paramsStr)
+        /// <summary>
+        /// 添加新频道到频道池
+        /// </summary>
+        /// <param name="channelId">频道ID</param>
+        /// <param name="channelName">频道名称，可选</param>
+        public void AddChannel(string channelId, string channelName = null)
         {
-            // 如果 TooManyRequests 请求失败，则重拾最多 3 次
-            var count = 5;
+            if (string.IsNullOrWhiteSpace(channelId) || _channelPool.ContainsKey(channelId))
+                return;
 
-            // 已处理的 message id
-            var messageIds = new List<string>();
-            do
+            _logger.Information("添加新频道：{0}", channelId);
+
+            // 使用现有的InitChannel方法初始化频道
+            InitChannel(channelId, channelName);
+
+            // 获取新添加的频道
+            if (_channelPool.TryGetValue(channelId, out var channel))
             {
-                HttpResponseMessage response = null;
+                // 启动该频道的任务处理线程
+                StartChannelTaskProcessing(channel);
+
+                _logger.Information("新频道 {0} 添加完成并启动任务处理线程", channelId);
+            }
+        }
+
+        /// <summary>
+        /// 从频道池移除频道
+        /// </summary>
+        /// <param name="channelId">频道ID</param>
+        public void RemoveChannel(string channelId)
+        {
+            // 不允许移除主频道
+            if (string.IsNullOrWhiteSpace(channelId) || channelId == _primaryChannelId)
+                return;
+
+            _logger.Information("移除频道：{0}", channelId);
+
+            // 尝试从频道池中获取并移除频道
+            if (_channelPool.TryRemove(channelId, out var channel))
+            {
                 try
                 {
-                    response = await PostJsonAsync(_discordInteractionUrl, paramsStr);
-                    if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+                    // 通知该频道的信号控制退出等待
+                    channel.SignalControl.Set();
+
+                    // 取消所有正在运行的任务
+                    foreach (var runningTask in channel.RunningTasks)
                     {
-                        return Message.Success();
-                    }
-                    else if (response.StatusCode == HttpStatusCode.TooManyRequests)
-                    {
-                        count--;
-                        if (count > 0)
-                        {
-                            // 等待 3~6 秒
-                            var random = new Random();
-                            var seconds = random.Next(3, 6);
-                            await Task.Delay(seconds * 1000);
-
-                            _logger.Warning("Http 请求执行频繁，等待重试 {@0}, {@1}, {@2}", paramsStr, response.StatusCode, response.Content);
-                            continue;
-                        }
-                    }
-                    else if (response.StatusCode == HttpStatusCode.NotFound)
-                    {
-                        count--;
-
-                        if (count > 0)
-                        {
-                            // 等待 3~6 秒
-                            var random = new Random();
-                            var seconds = random.Next(3, 6);
-                            await Task.Delay(seconds * 1000);
-
-                            // 当是 NotFound 时
-                            // 可能是 message id 错乱导致
-                            if (paramsStr.Contains("message_id") && paramsStr.Contains("nonce"))
-                            {
-                                var obj = JObject.Parse(paramsStr);
-                                if (obj.ContainsKey("message_id") && obj.ContainsKey("nonce"))
-                                {
-                                    var nonce = obj["nonce"].ToString();
-                                    var message_id = obj["message_id"].ToString();
-                                    if (!string.IsNullOrEmpty(nonce) && !string.IsNullOrWhiteSpace(message_id))
-                                    {
-                                        messageIds.Add(message_id);
-
-                                        var t = GetRunningTaskByNonce(nonce);
-                                        if (t != null && !string.IsNullOrWhiteSpace(t.ParentId))
-                                        {
-                                            var p = GetTask(t.ParentId);
-                                            if (p != null)
-                                            {
-                                                var newMessageId = p.MessageIds.Where(c => !messageIds.Contains(c)).FirstOrDefault();
-                                                if (!string.IsNullOrWhiteSpace(newMessageId))
-                                                {
-                                                    obj["message_id"] = newMessageId;
-
-                                                    var oldStr = paramsStr;
-                                                    paramsStr = obj.ToString();
-
-                                                    _logger.Warning("Http 可能消息错乱，等待重试 {@0}, {@1}, {@2}, {@3}", oldStr, paramsStr, response.StatusCode, response.Content);
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        runningTask.Value.Fail("频道已移除");
+                        SaveAndNotify(runningTask.Value);
                     }
 
-                    _logger.Error("Http 请求执行失败 {@0}, {@1}, {@2}", paramsStr, response.StatusCode, response.Content);
-
-                    var error = $"{response.StatusCode}: {paramsStr.Substring(0, Math.Min(paramsStr.Length, 1000))}";
-
-                    // 如果是 403 则直接禁用账号
-                    if (response.StatusCode == HttpStatusCode.Forbidden)
+                    // 清理任务队列
+                    while (channel.QueueTasks.TryDequeue(out var taskInfo))
                     {
-                        _logger.Error("Http 请求没有操作权限，禁用账号 {@0}", paramsStr);
-
-                        Account.Enable = false;
-                        Account.DisabledReason = "Http 请求没有操作权限，禁用账号";
-                        DbHelper.Instance.AccountStore.Update(Account);
-                        ClearAccountCache(Account.Id);
-
-                        return Message.Of(ReturnCode.FAILURE, "请求失败，禁用账号");
+                        taskInfo.Item1.Fail("频道已移除");
+                        SaveAndNotify(taskInfo.Item1);
                     }
 
-                    return Message.Of((int)response.StatusCode, error);
+                    // 释放资源
+                    channel.Dispose();
+
+                    _logger.Information("频道 {0} 已成功移除", channelId);
                 }
-                catch (HttpRequestException e)
+                catch (Exception ex)
                 {
-                    _logger.Error(e, "Http 请求执行异常 {@0}", paramsStr);
-
-                    return Message.Of(ReturnCode.FAILURE, e.Message?.Substring(0, Math.Min(e.Message.Length, 100)) ?? "未知错误");
-                }
-            } while (true);
-        }
-
-        /// <summary>
-        /// 全局切换 fast 模式
-        /// </summary>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> FastAsync(string nonce, EBotType botType)
-        {
-            if (botType == EBotType.NIJI_JOURNEY && Account.EnableNiji != true)
-            {
-                return Message.Success("忽略提交，未开启 niji");
-            }
-
-            if (botType == EBotType.MID_JOURNEY && Account.EnableMj != true)
-            {
-                return Message.Success("忽略提交，未开启 mj");
-            }
-
-            var json = botType == EBotType.MID_JOURNEY ? _paramsMap["fast"] : _paramsMap["fastniji"];
-            var paramsStr = ReplaceInteractionParams(json, nonce);
-            var obj = JObject.Parse(paramsStr);
-            paramsStr = obj.ToString();
-            return await PostJsonAndCheckStatusAsync(paramsStr);
-        }
-
-        /// <summary>
-        /// 全局切换 relax 模式
-        /// </summary>
-        /// <param name="nonce"></param>
-        /// <param name="botType"></param>
-        /// <returns></returns>
-        public async Task<Message> RelaxAsync(string nonce, EBotType botType)
-        {
-            if (botType == EBotType.NIJI_JOURNEY && Account.EnableNiji != true)
-            {
-                return Message.Success("忽略提交，未开启 niji");
-            }
-
-            if (botType == EBotType.MID_JOURNEY && Account.EnableMj != true)
-            {
-                return Message.Success("忽略提交，未开启 mj");
-            }
-
-            var json = botType == EBotType.NIJI_JOURNEY ? _paramsMap["relax"] : _paramsMap["relaxniji"];
-            var paramsStr = ReplaceInteractionParams(json, nonce);
-            var obj = JObject.Parse(paramsStr);
-            paramsStr = obj.ToString();
-            return await PostJsonAndCheckStatusAsync(paramsStr);
-        }
-
-        /// <summary>
-        /// 全局切换快速模式检查
-        /// </summary>
-        /// <returns></returns>
-        public async Task RelaxToFastValidate()
-        {
-            try
-            {
-                // 快速用完时
-                // 并且开启快速切换慢速模式时
-                if (Account != null && Account.FastExhausted && Account.EnableRelaxToFast == true)
-                {
-                    // 每 6~12 小时，和启动时检查账号是否有快速时长
-                    await RandomSyncInfo();
-
-                    // 判断 info 检查时间是否在 5 分钟内
-                    if (Account.InfoUpdated != null && Account.InfoUpdated.Value.AddMinutes(5) >= DateTime.Now)
-                    {
-                        _logger.Information("自动切换快速模式，验证 {@0}", Account.ChannelId);
-
-                        // 提取 fastime
-                        // 如果检查完之后，快速超过 1 小时，则标记为快速未用完
-                        var fastTime = Account.FastTimeRemaining?.ToString()?.Split('/')?.FirstOrDefault()?.Trim();
-                        if (!string.IsNullOrWhiteSpace(fastTime) && double.TryParse(fastTime, out var ftime) && ftime >= 1)
-                        {
-                            _logger.Information("自动切换快速模式，开始 {@0}", Account.ChannelId);
-
-                            // 标记未用完快速
-                            Account.FastExhausted = false;
-                            DbHelper.Instance.AccountStore.Update("FastExhausted", Account);
-
-                            // 如果开启了自动切换到快速，则自动切换到快速
-                            try
-                            {
-                                if (Account.EnableRelaxToFast == true)
-                                {
-                                    Thread.Sleep(2500);
-                                    await FastAsync(SnowFlake.NextId(), EBotType.MID_JOURNEY);
-
-                                    Thread.Sleep(2500);
-                                    await FastAsync(SnowFlake.NextId(), EBotType.NIJI_JOURNEY);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.Error(ex, "自动切换快速模式，执行异常 {@0}", Account.ChannelId);
-                            }
-
-                            ClearAccountCache(Account.Id);
-
-                            _logger.Information("自动切换快速模式，执行完成 {@0}", Account.ChannelId);
-                        }
-                    }
+                    _logger.Error(ex, "移除频道 {0} 时发生错误", channelId);
                 }
             }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "快速切换慢速模式，检查执行异常");
-            }
         }
 
         /// <summary>
-        /// 随机 6-12 小时 同步一次账号信息
+        /// 定时检查账号频道列表是否有变动
         /// </summary>
-        /// <returns></returns>
-        public async Task RandomSyncInfo()
+        private void StartChannelMonitoring()
         {
-            // 每 6~12 小时
-            if (Account.InfoUpdated == null || Account.InfoUpdated.Value.AddMinutes(5) < DateTime.Now)
+            Task.Factory.StartNew(async () =>
             {
-                var key = $"fast_exhausted_{Account.ChannelId}";
-                await _cache.GetOrCreateAsync(key, async c =>
+                _logger.Information("频道监控线程启动");
+
+                while (true)
                 {
                     try
                     {
-                        _logger.Information("随机同步账号信息开始 {@0}", Account.ChannelId);
+                        // 如果处于取消状态，则退出
+                        if (_longToken.IsCancellationRequested)
+                        {
+                            break;
+                        }
 
-                        // 随机 6~12 小时
-                        var random = new Random();
-                        var minutes = random.Next(360, 600);
-                        c.SetAbsoluteExpiration(TimeSpan.FromMinutes(minutes));
+                        // 从数据库获取最新的账号信息
+                        var latestAccount = DbHelper.Instance.AccountStore.Get(Account.Id);
+                        if (latestAccount != null)
+                        {
+                            // 检查频道列表是否有变动
+                            var currentChannelIds = _channelPool.Keys.ToList();
+                            var newChannelIds = new List<string>();
 
-                        await _taskService.InfoSetting(Account.Id);
+                            // 添加账号中的频道ID
+                            if (latestAccount.ChannelIds != null)
+                            {
+                                newChannelIds.AddRange(latestAccount.ChannelIds);
+                            }
 
-                        _logger.Information("随机同步账号信息完成 {@0}", Account.ChannelId);
+                            // 确保主频道始终存在
+                            if (!newChannelIds.Contains(_primaryChannelId))
+                            {
+                                newChannelIds.Add(_primaryChannelId);
+                            }
 
-                        return true;
+                            // 检查是否有变动
+                            if (!currentChannelIds.OrderBy(x => x).SequenceEqual(newChannelIds.OrderBy(x => x)))
+                            {
+                                _logger.Information("检测到频道列表变动，进行更新");
+                                UpdateChannelPool(newChannelIds);
+
+                                // 更新账号信息
+                                _account = latestAccount;
+                                ClearAccountCache(Account.Id);
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {
-                        _logger.Error(ex, "随机同步账号信息异常 {@0}", Account.ChannelId);
+                        _logger.Error(ex, "频道监控线程异常");
                     }
 
-                    return false;
-                });
+                    // 每5分钟检查一次
+                    await Task.Delay(TimeSpan.FromMinutes(5), _longToken.Token);
+                }
+
+                _logger.Information("频道监控线程结束");
+            }, _longToken.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
+
+        /// <summary>
+        /// 手动刷新频道池
+        /// </summary>
+        /// <returns>刷新结果</returns>
+        public bool RefreshChannelPool()
+        {
+            try
+            {
+                _logger.Information("手动刷新频道池开始");
+
+                // 从数据库获取最新的账号信息
+
+                var latestAccount = DbHelper.Instance.AccountStore.Get(Account.Id);
+                if (latestAccount != null)
+                {
+                    // 更新账号信息
+                    _account = latestAccount;
+                    ClearAccountCache(Account.Id);
+
+                    // 准备频道ID列表
+
+                    var newChannelIds = new List<string>();
+
+                    // 添加账号中的频道ID
+
+                    if (latestAccount.ChannelIds != null)
+                    {
+                        newChannelIds.AddRange(latestAccount.ChannelIds);
+                    }
+
+                    // 确保主频道始终存在
+
+                    if (!newChannelIds.Contains(_primaryChannelId))
+                    {
+                        newChannelIds.Add(_primaryChannelId);
+                    }
+
+                    // 更新频道池
+
+                    UpdateChannelPool(newChannelIds);
+
+
+                    _logger.Information("手动刷新频道池完成");
+                    return true;
+                }
+
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "手动刷新频道池异常");
+                return false;
             }
         }
     }

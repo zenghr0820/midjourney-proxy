@@ -241,7 +241,7 @@ namespace Midjourney.API.Controllers
 
             if (jobId.Length != 36)
             {
-                jobId = _discordHelper.GetMessageHash(jobId);
+                jobId = DiscordHelper.GetMessageHash(jobId);
             }
 
             if (string.IsNullOrWhiteSpace(jobId))
@@ -351,6 +351,7 @@ namespace Midjourney.API.Controllers
             task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, targetTask.GetProperty<string>(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, default));
 
             task.InstanceId = targetTask.InstanceId;
+            task.ChannelId = targetTask.ChannelId;
             task.Description = description;
 
             var messageFlags = targetTask.GetProperty<string>(Constants.TASK_PROPERTY_FLAGS, default)?.ToInt() ?? 0;
@@ -547,6 +548,7 @@ namespace Midjourney.API.Controllers
             var task = NewTask(actionDTO);
 
             task.InstanceId = targetTask.InstanceId;
+            task.ChannelId = targetTask.ChannelId;
             task.ParentId = targetTask.Id;
             task.BotType = targetTask.BotType;
             task.RealBotType = targetTask.RealBotType;

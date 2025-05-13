@@ -1,10 +1,10 @@
-﻿
-
+﻿using Midjourney.Infrastructure.Handle;
+using Midjourney.Infrastructure.Wss.Handle;
 using Midjourney.Infrastructure.Data;
-using Midjourney.Infrastructure.Handle;
 using Midjourney.Infrastructure.LoadBalancer;
 using Midjourney.Infrastructure.Services;
 using Midjourney.Infrastructure.Storage;
+using Midjourney.Infrastructure.Wss;
 
 namespace Midjourney.API
 {
@@ -39,7 +39,18 @@ namespace Midjourney.API
             services.AddTransient<UserMessageHandler, UserStartAndProgressHandler>();
             services.AddTransient<UserMessageHandler, UserRerollSuccessHandler>();
 
-            services.AddTransient<UserMessageHandler, UserShortenSuccessHandler>();
+            // wss消息处理程序
+            services.AddTransient<MessageHandler, ErrorMessageHandler>();
+            services.AddTransient<MessageHandler, ImagineSuccessHandler>();
+            services.AddTransient<MessageHandler, ActionSuccessHandler>();
+            services.AddTransient<MessageHandler, UpscaleSuccessHandler>();
+            services.AddTransient<MessageHandler, BlendSuccessHandler>();
+            services.AddTransient<MessageHandler, DescribeSuccessHandler>();
+            services.AddTransient<MessageHandler, ShowSuccessHandler>();
+            services.AddTransient<MessageHandler, VariationSuccessHandler>();
+            services.AddTransient<MessageHandler, StartAndProgressHandler>();
+            services.AddTransient<MessageHandler, RerollSuccessHandler>();
+            services.AddTransient<MessageHandler, ShortenSuccessHandler>();
 
 
             // 换脸服务
@@ -90,6 +101,12 @@ namespace Midjourney.API
 
             // Discord 负载均衡器
             services.AddSingleton<DiscordLoadBalancer>();
+
+            // WebSocket配置
+            services.AddSingleton<WebSocketConfig>();
+
+            // WebSocketStarterFactory 注册
+            services.AddSingleton<IWebSocketStarterFactory, WebSocketStarterFactory>();
 
             // Discord 账号助手
             services.AddSingleton<DiscordAccountHelper>();

@@ -1821,5 +1821,39 @@ namespace Midjourney.API.Controllers
 
             return success ? Result.Ok() : Result.Fail("连接失败");
         }
+
+        /// <summary>
+        /// 刷新指定实例的频道池
+        /// </summary>
+        /// <param name="id">实例ID</param>
+        /// <returns>刷新结果</returns>
+        [HttpPost("refresh-channel-pool/{id}")]
+        [ProducesResponseType(typeof(Result), 200)]
+        public IActionResult RefreshChannelPool(string id)
+        {
+            var instance = _loadBalancer.GetDiscordInstance(id);
+            if (instance == null)
+            {
+                return Ok(Result.Fail("实例不存在"));
+            }
+
+            try
+            {
+                var result = instance.RefreshChannelPool();
+                if (result)
+                {
+                    return Ok(Result.Ok("频道池刷新成功"));
+                }
+                else
+                {
+                    return Ok(Result.Fail("频道池刷新失败"));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "刷新频道池异常 {0}", id);
+                return Ok(Result.Fail($"频道池刷新异常: {ex.Message}"));
+            }
+        }
     }
 }

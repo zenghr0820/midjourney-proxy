@@ -54,10 +54,10 @@ namespace Midjourney.Infrastructure.Models
             Properties[name] = value;
 
             // 同时赋值将 Discord 实例 ID  = 频道 ID
-            if (name == Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID)
-            {
-                Properties[Constants.TASK_PROPERTY_DISCORD_CHANNEL_ID] = value;
-            }
+            // if (name == Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID)
+            // {
+            //     Properties[Constants.TASK_PROPERTY_DISCORD_CHANNEL_ID] = value;
+            // }
 
             return this;
         }

@@ -1,12 +1,10 @@
-﻿
-
-using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.Extensions.Caching.Memory;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.Handle;
 using Midjourney.Infrastructure.LoadBalancer;
 using Midjourney.Infrastructure.Services;
-using Org.BouncyCastle.Cms;
+using Midjourney.Infrastructure.Wss;
 using RestSharp;
 using Serilog;
 using System.Net;
@@ -31,7 +29,7 @@ namespace Midjourney.Infrastructure
         private readonly Dictionary<string, string> _paramsMap;
         private readonly IMemoryCache _memoryCache;
         private readonly ITaskService _taskService;
-
+        private readonly IWebSocketStarterFactory _webSocketStarterFactory;
         public DiscordAccountHelper(
             DiscordHelper discordHelper,
             ITaskStoreService taskStoreService,
@@ -39,6 +37,7 @@ namespace Midjourney.Infrastructure
             INotifyService notifyService,
             IEnumerable<UserMessageHandler> userMessageHandlers,
             IMemoryCache memoryCache,
+            IWebSocketStarterFactory webSocketStarterFactory,
             ITaskService taskService)
         {
             _properties = GlobalConfiguration.Setting;
@@ -48,7 +47,7 @@ namespace Midjourney.Infrastructure
             _botMessageHandlers = messageHandlers;
             _userMessageHandlers = userMessageHandlers;
             _memoryCache = memoryCache;
-
+            _webSocketStarterFactory = webSocketStarterFactory;
             var paramsMap = new Dictionary<string, string>();
             var assembly = Assembly.GetExecutingAssembly();
             var assemblyName = assembly.GetName().Name;
@@ -90,7 +89,7 @@ namespace Midjourney.Infrastructure
                 account.UserAgent = Constants.DEFAULT_DISCORD_USER_AGENT;
             }
 
-            // Bot 消息监听器
+            // 创建WebProxy
             WebProxy webProxy = null;
             if (!string.IsNullOrEmpty(_properties.Proxy?.Host))
             {
@@ -109,23 +108,16 @@ namespace Midjourney.Infrastructure
 
             if (account.Enable == true)
             {
-                // bot 消息监听
-                var messageListener = new BotMessageListener(_discordHelper, webProxy);
-                messageListener.Init(discordInstance, _botMessageHandlers, _userMessageHandlers);
-                await messageListener.StartAsync();
-
-                // 用户 WebSocket 连接
-                var webSocket = new WebSocketManager(
-                    _discordHelper,
-                    messageListener,
-                    webProxy,
-                    discordInstance,
-                    _memoryCache);
-                await webSocket.StartAsync();
-
-                // 跟踪 wss 连接
-                discordInstance.BotMessageListener = messageListener;
-                discordInstance.WebSocketManager = webSocket;
+                // 使用工厂创建WebSocketStarter，工厂内部会设置WebSocketStarter到DiscordInstance
+                var webSocketStarter = _webSocketStarterFactory.CreateDiscordSocketWithInstance(discordInstance);
+                await webSocketStarter.StartAsync();
+                
+                // 不需要再次设置WebSocketStarter，因为工厂已经设置了
+                // discordInstance.WebSocketStarter = webSocketStarter;
+            }
+            else
+            {
+                Log.Information("Discord账号未启用, 跳过连接 - 账号: {0}", account.GetDisplay());
             }
 
             return discordInstance;

@@ -141,14 +141,14 @@ namespace Midjourney.Infrastructure.Handle
                     if (task.Status == TaskStatus.IN_PROGRESS)
                     {
                         task.ImageUrl = imageUrl;
-                        task.SetProperty(Constants.TASK_PROPERTY_MESSAGE_HASH, discordHelper.GetMessageHash(imageUrl));
+                        task.SetProperty(Constants.TASK_PROPERTY_MESSAGE_HASH, DiscordHelper.GetMessageHash(imageUrl));
                         task.Awake();
                     }
                 }
                 else
                 {
                     task.ImageUrl = imageUrl;
-                    task.SetProperty(Constants.TASK_PROPERTY_MESSAGE_HASH, discordHelper.GetMessageHash(imageUrl));
+                    task.SetProperty(Constants.TASK_PROPERTY_MESSAGE_HASH, DiscordHelper.GetMessageHash(imageUrl));
                     task.Awake();
                 }
             }

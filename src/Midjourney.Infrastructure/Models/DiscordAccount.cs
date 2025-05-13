@@ -58,6 +58,11 @@ namespace Midjourney.Infrastructure.Models
         public string BotToken { get; set; }
 
         /// <summary>
+        /// 是否启动 Bot token wss
+        /// </summary>
+        public bool UseBotWss { get; set; }
+
+        /// <summary>
         /// 用户UserAgent。
         /// </summary>
         [Display(Name = "用户UserAgent")]
@@ -395,7 +400,8 @@ namespace Midjourney.Infrastructure.Models
         public List<string> VerticalDomainIds { get; set; } = new List<string>();
 
         /// <summary>
-        /// 子频道列表
+        /// 子频道列表（同一服务器下的其他频道）
+        /// 格式："https://discord.com/channels/{guildId}/{channelId}, {channelName}"
         /// </summary>
         [JsonMap]
         public List<string> SubChannels { get; set; } = new List<string>();
@@ -406,6 +412,17 @@ namespace Midjourney.Infrastructure.Models
         /// </summary>
         [JsonMap]
         public Dictionary<string, string> SubChannelValues { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>
+        /// 频道ID列表
+        /// </summary>
+        [JsonMap]
+        public List<string> ChannelIds { get; set; } = new List<string>();
+
+        /// <summary>
+        /// 是否自动获取服务器下的所有频道
+        /// </summary>
+        public bool EnableAutoFetchChannels { get; set; } = false;
 
         /// <summary>
         /// 执行中的任务数 - 用于前台显示
@@ -685,19 +702,19 @@ namespace Midjourney.Infrastructure.Models
                     {
                         continue;
                     }
-
+                    
                     // {id} 作为 key, {guid} 作为 value
                     var fir = item.Split(',').Where(c => c.Contains("https://discord.com/channels")).FirstOrDefault();
                     if (fir == null)
                     {
                         continue;
                     }
-
+                    
                     var arr = fir.Split('/').Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
                     if (arr.Length < 5)
                     {
                         continue;
-                    }
+        }
 
                     var guid = arr[3];
                     var id = arr[4];

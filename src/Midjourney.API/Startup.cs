@@ -11,6 +11,8 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.OpenApi.Models;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Options;
+using Midjourney.Infrastructure.Wss;
+using Midjourney.Infrastructure.Wss.Handle;
 using Serilog;
 
 namespace Midjourney.API

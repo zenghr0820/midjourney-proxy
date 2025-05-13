@@ -267,7 +267,12 @@ namespace Midjourney.Infrastructure
         /// <summary>
         /// 视频换脸任务
         /// </summary>
-        SWAP_VIDEO_FACE
+        SWAP_VIDEO_FACE,
+
+        /// <summary>
+        ///  混图放大
+        /// </summary>
+        MIX_UPSCALE
     }
 
     /// <summary>

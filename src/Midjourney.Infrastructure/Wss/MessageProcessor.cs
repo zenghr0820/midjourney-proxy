@@ -1,280 +1,143 @@
-﻿using Discord;
-using Discord.Commands;
-using Discord.Net.Rest;
-using Discord.Net.WebSockets;
+using Midjourney.Infrastructure.Wss.Handle;
+using Serilog;
+using System.Text.Json;
+using System.Threading.Channels;
 using Discord.WebSocket;
-using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Dto;
-using Midjourney.Infrastructure.Handle;
 using Midjourney.Infrastructure.LoadBalancer;
+using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Util;
 using RestSharp;
-using Serilog;
-using System.Diagnostics.Metrics;
 using System.Net;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
-using EventData = Midjourney.Infrastructure.Dto.EventData;
-
-namespace Midjourney.Infrastructure
+namespace Midjourney.Infrastructure.Wss
 {
     /// <summary>
-    /// 机器人消息监听器。
+    /// WebSocket消息处理器，用于高效处理消息队列
     /// </summary>
-    public class BotMessageListener : IDisposable
+    public class MessageProcessor : IDisposable
     {
-        private readonly ILogger _logger = Log.Logger;
+        private readonly ILogger _logger;
+        private readonly string _logContext;
+        private readonly CancellationTokenSource _cancellationTokenSource;
+        private readonly Task _processingTask;
+        
+        // 使用Channel替代ConcurrentQueue，提高消息处理效率
+        private readonly Channel<JsonElement> _messageChannel;
 
-        private readonly WebProxy _webProxy;
-        private readonly DiscordHelper _discordHelper;
+        private readonly IEnumerable<MessageHandler> _messageHandlers;
+        private readonly DiscordInstance _discordInstance;
+        private DiscordAccount Account => _discordInstance?.Account;
         private readonly ProxyProperties _properties;
 
-        private DiscordInstance _discordInstance;
-        private IEnumerable<BotMessageHandler> _botMessageHandlers;
-        private IEnumerable<UserMessageHandler> _userMessageHandlers;
-
-        public BotMessageListener(DiscordHelper discordHelper, WebProxy webProxy = null)
+        /// <summary>
+        /// 构造函数
+        /// </summary>
+        /// <param name="logContext">日志上下文</param>
+        /// <param name="messageHandlers">消息处理器集合</param>
+        /// <param name="discordInstance">Discord实例</param>
+        public MessageProcessor(
+            string logContext,
+            IEnumerable<MessageHandler> messageHandlers,
+            DiscordInstance discordInstance)
         {
+            _logContext = logContext;
+            _logger = Log.Logger;
+            _messageHandlers = messageHandlers;
+            _discordInstance = discordInstance;
             _properties = GlobalConfiguration.Setting;
-            _webProxy = webProxy;
-            _discordHelper = discordHelper;
-        }
-
-        public void Init(
-            DiscordInstance instance,
-            IEnumerable<BotMessageHandler> botMessageHandlers,
-            IEnumerable<UserMessageHandler> userMessageHandlers)
-        {
-            _discordInstance = instance;
-            _botMessageHandlers = botMessageHandlers;
-            _userMessageHandlers = userMessageHandlers;
-        }
-
-        private DiscordAccount Account => _discordInstance?.Account;
-
-        public async Task StartAsync()
-        {
-            // 机器人 TOKEN 可选
-            if (string.IsNullOrWhiteSpace(Account.BotToken))
+            
+            // 创建无界Channel
+            _messageChannel = Channel.CreateUnbounded<JsonElement>(new UnboundedChannelOptions
             {
-                return;
-            }
-
-            _client = new DiscordSocketClient(new DiscordSocketConfig
-            {
-                //// How much logging do you want to see?
-                LogLevel = LogSeverity.Info,
-
-                // If you or another service needs to do anything with messages
-                // (eg. checking Reactions, checking the content of edited/deleted messages),
-                // you must set the MessageCacheSize. You may adjust the number as needed.
-                //MessageCacheSize = 50,
-
-                RestClientProvider = _webProxy != null ? CustomRestClientProvider.Create(_webProxy, true)
-                : DefaultRestClientProvider.Create(true),
-                WebSocketProvider = DefaultWebSocketProvider.Create(_webProxy),
-
-                // 读取消息权限 GatewayIntents.MessageContent
-                // GatewayIntents.AllUnprivileged & ~(GatewayIntents.GuildScheduledEvents | GatewayIntents.GuildInvites) | GatewayIntents.MessageContent
-                GatewayIntents = GatewayIntents.AllUnprivileged & ~(GatewayIntents.GuildScheduledEvents | GatewayIntents.GuildInvites) | GatewayIntents.MessageContent
+                SingleReader = true,
+                SingleWriter = false
             });
-
-            _commands = new CommandService(new CommandServiceConfig
-            {
-                // Again, log level:
-                LogLevel = LogSeverity.Info,
-
-                // There's a few more properties you can set,
-                // for example, case-insensitive commands.
-                CaseSensitiveCommands = false,
-            });
-
-            // Subscribe the logging handler to both the client and the CommandService.
-            _client.Log += LogAction;
-            _commands.Log += LogAction;
-
-            await _client.LoginAsync(TokenType.Bot, Account.BotToken);
-            await _client.StartAsync();
-
-            // Centralize the logic for commands into a separate method.
-            // Subscribe a handler to see if a message invokes a command.
-            _client.MessageReceived += HandleCommandAsync;
-            _client.MessageUpdated += MessageUpdatedAsync;
+            
+            _cancellationTokenSource = new CancellationTokenSource();
+            _processingTask = Task.Run(ProcessMessages, _cancellationTokenSource.Token);
         }
-
-        private DiscordSocketClient _client;
-
-        // Keep the CommandService and DI container around for use with commands.
-        // These two types require you install the Discord.Net.Commands package.
-        private CommandService _commands;
-
-        // Example of a logging handler. This can be re-used by addons
-        // that ask for a Func<LogMessage, Task>.
-        private Task LogAction(LogMessage message)
+        
+        /// <summary>
+        /// 添加消息到队列
+        /// </summary>
+        /// <param name="message">JSON消息</param>
+        public void EnqueueMessage(JsonElement message)
         {
-            switch (message.Severity)
+            if (_messageChannel.Writer.TryWrite(message))
             {
-                case LogSeverity.Critical:
-                case LogSeverity.Error:
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    break;
-
-                case LogSeverity.Warning:
-                    Console.ForegroundColor = ConsoleColor.Yellow;
-                    break;
-
-                case LogSeverity.Info:
-                    Console.ForegroundColor = ConsoleColor.White;
-                    break;
-
-                case LogSeverity.Verbose:
-                case LogSeverity.Debug:
-                    Console.ForegroundColor = ConsoleColor.DarkGray;
-                    break;
+                _logger.Debug("消息已加入队列 {@0}", _logContext);
             }
-
-            Log.Information($"{DateTime.Now,-19} [{message.Severity,8}] {message.Source}: {message.Message} {message.Exception}");
-
-            return Task.CompletedTask;
+            else
+            {
+                _logger.Warning("消息加入队列失败 {@0}", _logContext);
+            }
         }
 
         /// <summary>
-        /// 检查频道是否属于当前账号
+        /// 处理消息队列
         /// </summary>
-        private bool IsChannelBelongsToAccount(ISocketMessageChannel channel)
-        {
-            if (channel == null)
-            {
-                return false;
-            }
-
-            string channelId = channel.Id.ToString();
-            
-            // 检查是否为主频道
-            if (channelId == Account.ChannelId)
-            {
-                return true;
-            }
-            
-            // 检查是否为子频道（同一服务器的其他频道）
-            if (Account.SubChannelValues != null && Account.SubChannelValues.ContainsKey(channelId))
-            {
-                return true;
-            }
-            
-            // 检查是否为私信频道
-            if (channel is SocketDMChannel && 
-                (channelId == Account.PrivateChannelId || channelId == Account.NijiBotChannelId))
-            {
-                return true;
-            }
-            
-            return false;
-        }
-
-        /// <summary>
-        /// 处理接收到的消息
-        /// </summary>
-        /// <param name="arg"></param>
-        /// <returns></returns>
-        private async Task HandleCommandAsync(SocketMessage arg)
+        private async Task ProcessMessages()
         {
             try
             {
-                var msg = arg as SocketUserMessage;
-                if (msg == null)
-                    return;
-
-
-                _logger.Information($"BOT Received, {msg.Type}, id: {msg.Id}, rid: {msg.Reference?.MessageId.Value}, mid: {msg?.InteractionMetadata?.Id}, {msg.Content}, channel: {msg.Channel?.Id}");
-
-                // 验证消息是否来自当前账号的频道
-                if (!IsChannelBelongsToAccount(msg.Channel))
+                _logger.Information("消息处理任务已启动 {@0}", _logContext);
+                
+                // 等待直到有消息可读或被取消
+                while (await _messageChannel.Reader.WaitToReadAsync(_cancellationTokenSource.Token).ConfigureAwait(false))
                 {
-                    return;
-                }
-
-                if (!string.IsNullOrWhiteSpace(msg.Content) && msg.Author.IsBot)
-                {
-                    foreach (var handler in _botMessageHandlers.OrderBy(h => h.Order()))
+                    // 尝试读取所有可用消息
+                    while (_messageChannel.Reader.TryRead(out var message))
                     {
-                        // 消息加锁处理
-                        LocalLock.TryLock($"lock_{msg.Id}", TimeSpan.FromSeconds(10), () =>
+                        try
                         {
-                            handler.Handle(_discordInstance, MessageType.CREATE, msg);
-                        });
-                    }
-                }
-                // describe 重新提交
-                // MJ::Picread::Retry
-                else if (msg.Embeds.Count > 0 && msg.Author.IsBot && msg.Components.Count > 0
-                    && msg.Components.First().Components.Any(x => x.CustomId?.Contains("PicReader") == true))
-                {
-                    // 消息加锁处理
-                    LocalLock.TryLock($"lock_{msg.Id}", TimeSpan.FromSeconds(10), () =>
-                    {
-                        var em = msg.Embeds.FirstOrDefault();
-                        if (em != null && !string.IsNullOrWhiteSpace(em.Description))
-                        {
-                            var handler = _botMessageHandlers.FirstOrDefault(x => x.GetType() == typeof(BotDescribeSuccessHandler));
-                            handler?.Handle(_discordInstance, MessageType.CREATE, msg);
+                            //  分发消息
+                            OnMessage(message);
                         }
-                    });
+                        catch (Exception ex)
+                        {
+                            _logger.Error(ex, "处理消息时发生异常 {@0}", _logContext);
+                        }
+                    }
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.Information("消息处理任务已取消 {@0}", _logContext);
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "处理 bot 消息异常");
+                _logger.Error(ex, "消息处理任务异常 {@0}", _logContext);
             }
-
-            await Task.CompletedTask;
+            finally
+            {
+                _logger.Information("消息处理任务已结束 {@0}", _logContext);
+            }
         }
-
+    
+        
         /// <summary>
-        /// 处理更新消息
+        /// 资源释放
         /// </summary>
-        /// <param name="before"></param>
-        /// <param name="after"></param>
-        /// <param name="channel"></param>
-        /// <returns></returns>
-        private async Task MessageUpdatedAsync(Cacheable<IMessage, ulong> before, SocketMessage after, ISocketMessageChannel channel)
+        public void Dispose()
         {
             try
             {
-                var msg = after as IUserMessage;
-                if (msg == null)
-                    return;
-
-                _logger.Information($"BOT Updated, {msg.Type}, id: {msg.Id}, rid: {msg.Reference?.MessageId.Value}, {msg.Content}, channel: {channel?.Id}");
-
-                // 验证消息是否来自当前账号的频道
-                if (!IsChannelBelongsToAccount(channel))
-                {
-                    return;
-                }
-
-
-                if (!string.IsNullOrWhiteSpace(msg.Content)
-                    && msg.Content.Contains("%")
-                    && msg.Author.IsBot)
-                {
-                    foreach (var handler in _botMessageHandlers.OrderBy(h => h.Order()))
-                    {
-                        handler.Handle(_discordInstance, MessageType.UPDATE, after);
-                    }
-                }
-                else if (msg.InteractionMetadata is ApplicationCommandInteractionMetadata metadata && metadata.Name == "describe")
-                {
-                    var handler = _botMessageHandlers.FirstOrDefault(x => x.GetType() == typeof(BotDescribeSuccessHandler));
-                    handler?.Handle(_discordInstance, MessageType.CREATE, after);
-                }
-
-                await Task.CompletedTask;
+                _cancellationTokenSource.Cancel();
+                _messageChannel.Writer.Complete();
+                
+                // 等待处理任务完成
+                var waitTask = Task.WhenAny(_processingTask, Task.Delay(1000));
+                waitTask.ConfigureAwait(false).GetAwaiter().GetResult();
+                
+                _cancellationTokenSource.Dispose();
+                
+                _logger.Information("消息处理器已释放 {@0}", _logContext);
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "处理 bot 更新消息异常");
+                _logger.Error(ex, "释放消息处理器时发生异常 {@0}", _logContext);
             }
         }
 
@@ -1329,7 +1192,7 @@ namespace Midjourney.Infrastructure
                     if (eventData != null &&
                         (eventData.ChannelId == Account.ChannelId || Account.SubChannelValues.ContainsKey(eventData.ChannelId)))
                     {
-                        foreach (var messageHandler in _userMessageHandlers.OrderBy(h => h.Order()))
+                        foreach (var messageHandler in _messageHandlers.OrderBy(h => h.Order()))
                         {
                             // 处理过了
                             if (eventData.GetProperty<bool?>(Constants.MJ_MESSAGE_HANDLED, default) == true)
@@ -1356,7 +1219,7 @@ namespace Midjourney.Infrastructure
                         var em = eventData.Embeds.FirstOrDefault();
                         if (em != null && !string.IsNullOrWhiteSpace(em.Description))
                         {
-                            var handler = _userMessageHandlers.FirstOrDefault(x => x.GetType() == typeof(UserDescribeSuccessHandler));
+                            var handler = _messageHandlers.FirstOrDefault(x => x.GetType() == typeof(DescribeSuccessHandler));
                             handler?.Handle(_discordInstance, MessageType.CREATE, eventData);
                         }
                     });
@@ -1370,7 +1233,7 @@ namespace Midjourney.Infrastructure
                         // 消息加锁处理
                         LocalLock.TryLock($"lock_{eventData.Id}", TimeSpan.FromSeconds(10), () =>
                         {
-                            var handler = _userMessageHandlers.FirstOrDefault(x => x.GetType() == typeof(UserStartAndProgressHandler));
+                            var handler = _messageHandlers.FirstOrDefault(x => x.GetType() == typeof(StartAndProgressHandler));
                             handler?.Handle(_discordInstance, MessageType.UPDATE, eventData);
                         });
                     }
@@ -1379,7 +1242,7 @@ namespace Midjourney.Infrastructure
                         // 消息加锁处理
                         LocalLock.TryLock($"lock_{eventData.Id}", TimeSpan.FromSeconds(10), () =>
                         {
-                            var handler = _userMessageHandlers.FirstOrDefault(x => x.GetType() == typeof(UserDescribeSuccessHandler));
+                            var handler = _messageHandlers.FirstOrDefault(x => x.GetType() == typeof(DescribeSuccessHandler));
                             handler?.Handle(_discordInstance, MessageType.CREATE, eventData);
                         });
                     }
@@ -1390,7 +1253,7 @@ namespace Midjourney.Infrastructure
                         // 消息加锁处理
                         LocalLock.TryLock($"lock_{eventData.Id}", TimeSpan.FromSeconds(10), () =>
                         {
-                            var handler = _userMessageHandlers.FirstOrDefault(x => x.GetType() == typeof(UserShortenSuccessHandler));
+                            var handler = _messageHandlers.FirstOrDefault(x => x.GetType() == typeof(ShortenSuccessHandler));
                             handler?.Handle(_discordInstance, MessageType.CREATE, eventData);
                         });
                     }
@@ -1420,24 +1283,6 @@ namespace Midjourney.Infrastructure
             return data;
         }
 
-        public void Dispose()
-        {
-            // Unsubscribe from events
-            if (_client != null)
-            {
-                _client.Log -= LogAction;
-                _client.MessageReceived -= HandleCommandAsync;
-                _client.MessageUpdated -= MessageUpdatedAsync;
-
-                // Dispose the Discord client
-                _client.Dispose();
-            }
-
-            // Dispose the command service
-            if (_commands != null)
-            {
-                _commands.Log -= LogAction;
-            }
-        }
     }
-}
+
+} 

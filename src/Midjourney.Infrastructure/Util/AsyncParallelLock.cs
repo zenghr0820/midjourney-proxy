@@ -1,6 +1,4 @@
-﻿
-
-namespace Midjourney.Infrastructure.Util
+﻿namespace Midjourney.Infrastructure.Util
 {
     /// <summary>
     /// 定义一个基于信号量的锁管理类，支持动态调整最大并行度
@@ -171,6 +169,34 @@ namespace Midjourney.Infrastructure.Util
             }
 
             return acquired;
+        }
+
+        /// <summary>
+        /// 尝试异步获取锁，有超时时间。
+        /// </summary>
+        /// <param name="timeoutMs">超时时间（毫秒）</param>
+        /// <returns>锁结果对象，包含是否成功获取锁</returns>
+        public async Task<AsyncLockResult> TryLockAsync(int timeoutMs)
+        {
+            SemaphoreSlim semaphore;
+
+            lock (_syncLock)
+            {
+                semaphore = _semaphore;
+            }
+
+            // 尝试在指定时间内获取锁
+            bool acquired = await semaphore.WaitAsync(timeoutMs);
+            if (acquired)
+            {
+                lock (_syncLock)
+                {
+                    _currentlyHeld++;
+                }
+                return new AsyncLockResult(true, this);
+            }
+
+            return new AsyncLockResult(false, null);
         }
 
         /// <summary>

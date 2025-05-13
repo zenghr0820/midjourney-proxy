@@ -1,5 +1,3 @@
-
-
 using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Caching.Memory;
@@ -474,7 +472,7 @@ namespace Midjourney.API
 
                 var enableInstanceIds = _discordLoadBalancer.GetAllInstances()
                 .Where(instance => instance.IsAlive)
-                .Select(instance => instance.ChannelId)
+                .Select(instance => instance.GuildId)
                 .ToHashSet();
 
                 _logger.Information("当前可用账号数 [{@0}] - {@1}", enableInstanceIds.Count, string.Join(", ", enableInstanceIds));
@@ -585,7 +583,7 @@ namespace Midjourney.API
                                     account.CoreSize = 3;
                                 }
                             }
-
+                            
                             // 启用自动获取私信 ID
                             if (setting.EnableAutoGetPrivateId)
                             {
@@ -629,7 +627,7 @@ namespace Midjourney.API
                                 info.AppendLine($"{account.Id}初始化中... 获取 NIJI 私聊频道 ID 耗时: {sw.ElapsedMilliseconds}ms");
                                 sw.Restart();
                             }
-
+                            
                             account.DayDrawCount = dayCount;
                             db.Update("NijiBotChannelId,PrivateChannelId,AllowModes,SubChannels,SubChannelValues,FastExhausted,DayDrawCount", account);
 

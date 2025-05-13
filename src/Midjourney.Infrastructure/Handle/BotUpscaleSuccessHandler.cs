@@ -53,7 +53,7 @@ namespace Midjourney.Infrastructure.Handle
         private void FindAndFinishUTask(DiscordInstance instance, string finalPrompt, int index, SocketMessage message)
         {
             string imageUrl = GetImageUrl(message);
-            string messageHash = discordHelper.GetMessageHash(imageUrl);
+            string messageHash = DiscordHelper.GetMessageHash(imageUrl);
 
             var msgId = GetMessageId(message);
             var fullPrompt = GetFullPrompt(message);

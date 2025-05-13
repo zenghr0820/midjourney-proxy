@@ -58,7 +58,7 @@ namespace Midjourney.Infrastructure.Handle
                     }
 
                     var imageUrl = message.Embeds.First().Image?.Url;
-                    var messageHash = discordHelper.GetMessageHash(imageUrl);
+                    var messageHash = DiscordHelper.GetMessageHash(imageUrl);
 
                     var finalPrompt = message.Embeds.First().Description;
 

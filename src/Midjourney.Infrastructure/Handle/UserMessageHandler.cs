@@ -90,7 +90,7 @@ namespace Midjourney.Infrastructure.Handle
             var fullPrompt = GetFullPrompt(message);
 
             string imageUrl = GetImageUrl(message);
-            string messageHash = discordHelper.GetMessageHash(imageUrl);
+            string messageHash = DiscordHelper.GetMessageHash(imageUrl);
 
             var task = instance.FindRunningTask(c => (c.Status == TaskStatus.IN_PROGRESS || c.Status == TaskStatus.SUBMITTED) && c.MessageId == msgId).FirstOrDefault();
             if (task == null && !string.IsNullOrWhiteSpace(message.InteractionMetadata?.Id))
@@ -196,7 +196,7 @@ namespace Midjourney.Infrastructure.Handle
 
             task.SetProperty(Constants.TASK_PROPERTY_MESSAGE_ID, message.Id);
             task.SetProperty(Constants.TASK_PROPERTY_FLAGS, Convert.ToInt32(message.Flags));
-            task.SetProperty(Constants.TASK_PROPERTY_MESSAGE_HASH, discordHelper.GetMessageHash(task.ImageUrl));
+            task.SetProperty(Constants.TASK_PROPERTY_MESSAGE_HASH, DiscordHelper.GetMessageHash(task.ImageUrl));
 
             task.Buttons = message.Components.SelectMany(x => x.Components)
                 .Select(btn =>

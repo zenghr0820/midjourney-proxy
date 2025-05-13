@@ -1,6 +1,4 @@
-﻿
-
-using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.Extensions.Caching.Memory;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.LoadBalancer;
@@ -179,13 +177,13 @@ namespace Midjourney.Infrastructure.Services
             {
                 return SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "无可用的账号实例");
             }
-            if (!instance.IsIdleQueue)
+            if (!instance.IsIdleQueue())
             {
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, "提交失败，队列已满，请稍后重试");
             }
 
-            info.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, instance.ChannelId);
-            info.InstanceId = instance.ChannelId;
+            info.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, instance.GuildId);
+            info.InstanceId = instance.GuildId;
 
             return instance.SubmitTaskAsync(info, async () =>
             {
@@ -241,50 +239,50 @@ namespace Midjourney.Infrastructure.Services
                 return SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "无可用的账号实例");
             }
 
-            info.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, instance.ChannelId);
-            info.InstanceId = instance.ChannelId;
+            info.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, instance.GuildId);
+            info.InstanceId = instance.GuildId;
 
             return instance.SubmitTaskAsync(info, async () =>
             {
                 return await instance.ShowAsync(info.JobId,
-                    info.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default), info.RealBotType ?? info.BotType);
+                    info.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default), info.RealBotType ?? info.BotType, info.ChannelId);
             });
         }
 
         public SubmitResultVO SubmitUpscale(TaskInfo task, string targetMessageId, string targetMessageHash, int index, int messageFlags)
         {
-            var instanceId = task.GetProperty<string>(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, default);
+            var instanceId = task.InstanceId;
             var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(instanceId);
             if (discordInstance == null || !discordInstance.IsAlive)
             {
                 return SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "账号不可用: " + instanceId);
             }
-            if (!discordInstance.IsIdleQueue)
+            if (!discordInstance.IsIdleQueue())
             {
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, "提交失败，队列已满，请稍后重试");
             }
 
             return discordInstance.SubmitTaskAsync(task, async () =>
                 await discordInstance.UpscaleAsync(targetMessageId, index, targetMessageHash, messageFlags,
-                task.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default), task.RealBotType ?? task.BotType));
+                task.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default), task.RealBotType ?? task.BotType), task.ChannelId);
         }
 
         public SubmitResultVO SubmitVariation(TaskInfo task, string targetMessageId, string targetMessageHash, int index, int messageFlags)
         {
-            var instanceId = task.GetProperty<string>(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, default);
+            var instanceId = task.InstanceId;
             var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(instanceId);
             if (discordInstance == null || !discordInstance.IsAlive)
             {
                 return SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "账号不可用: " + instanceId);
             }
-            if (!discordInstance.IsIdleQueue)
+            if (!discordInstance.IsIdleQueue())
             {
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, "提交失败，队列已满，请稍后重试");
             }
 
             return discordInstance.SubmitTaskAsync(task, async () =>
                 await discordInstance.VariationAsync(targetMessageId, index, targetMessageHash, messageFlags,
-                task.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default), task.RealBotType ?? task.BotType));
+                task.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default), task.RealBotType ?? task.BotType), task.ChannelId);
         }
 
         /// <summary>
@@ -297,20 +295,20 @@ namespace Midjourney.Infrastructure.Services
         /// <returns></returns>
         public SubmitResultVO SubmitReroll(TaskInfo task, string targetMessageId, string targetMessageHash, int messageFlags)
         {
-            var instanceId = task.GetProperty<string>(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, default);
+            var instanceId = task.InstanceId;
             var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(instanceId);
             if (discordInstance == null || !discordInstance.IsAlive)
             {
                 return SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "账号不可用: " + instanceId);
             }
-            if (!discordInstance.IsIdleQueue)
+            if (!discordInstance.IsIdleQueue())
             {
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, "提交失败，队列已满，请稍后重试");
             }
 
             return discordInstance.SubmitTaskAsync(task, async () =>
                 await discordInstance.RerollAsync(targetMessageId, targetMessageHash, messageFlags,
-                task.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default), task.RealBotType ?? task.BotType));
+                task.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default), task.RealBotType ?? task.BotType), task.ChannelId);
         }
 
         /// <summary>
@@ -330,13 +328,13 @@ namespace Midjourney.Infrastructure.Services
             {
                 return SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "无可用的账号实例");
             }
-            if (!discordInstance.IsIdleQueue)
+            if (!discordInstance.IsIdleQueue())
             {
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, "提交失败，队列已满，请稍后重试");
             }
 
-            task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.ChannelId);
-            task.InstanceId = discordInstance.ChannelId;
+            task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.GuildId);
+            task.InstanceId = discordInstance.GuildId;
 
             return discordInstance.SubmitTaskAsync(task, async () =>
             {
@@ -393,7 +391,7 @@ namespace Midjourney.Infrastructure.Services
                 //  task.RealBotType ?? task.BotType);
 
                 return await discordInstance.DescribeByLinkAsync(link, task.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default),
-                   task.RealBotType ?? task.BotType);
+                   task.RealBotType ?? task.BotType, task.ChannelId);
             });
         }
 
@@ -413,8 +411,8 @@ namespace Midjourney.Infrastructure.Services
             {
                 return SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "无可用的账号实例");
             }
-            task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.ChannelId);
-            task.InstanceId = discordInstance.ChannelId;
+            task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.GuildId);
+            task.InstanceId = discordInstance.GuildId;
 
             return discordInstance.SubmitTaskAsync(task, async () =>
             {
@@ -440,8 +438,8 @@ namespace Midjourney.Infrastructure.Services
             {
                 return SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "无可用的账号实例");
             }
-            task.InstanceId = discordInstance.ChannelId;
-            task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.ChannelId);
+            task.InstanceId = discordInstance.GuildId;
+            task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.GuildId);
             return discordInstance.SubmitTaskAsync(task, async () =>
             {
                 var finalFileNames = new List<string>();
@@ -470,7 +468,8 @@ namespace Midjourney.Infrastructure.Services
         /// <returns></returns>
         public SubmitResultVO SubmitAction(TaskInfo task, SubmitActionDTO submitAction)
         {
-            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(task.SubInstanceId ?? task.InstanceId);
+            Log.Information("task = {0 }, ChannelId = {1}", task, task.ChannelId);
+            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(task.SubInstanceId ?? task.ChannelId);
             if (discordInstance == null)
             {
                 // 如果主实例没有找子实例
@@ -478,7 +477,7 @@ namespace Midjourney.Infrastructure.Services
                 var list = _discordLoadBalancer.GetAliveInstances().ToList();
                 foreach (var item in list)
                 {
-                    if (item.Account.SubChannelValues.ContainsKey(task.SubInstanceId ?? task.InstanceId))
+                    if (item.Account.SubChannelValues.ContainsKey(task.SubInstanceId ?? task.ChannelId))
                     {
                         ids.Add(item.ChannelId);
                     }
@@ -493,7 +492,7 @@ namespace Midjourney.Infrastructure.Services
                     if (discordInstance != null)
                     {
                         // 如果找到了，则标记当前任务的子频道信息
-                        task.SubInstanceId = task.SubInstanceId ?? task.InstanceId;
+                        task.SubInstanceId = task.SubInstanceId ?? task.ChannelId;
                     }
                 }
             }
@@ -502,13 +501,13 @@ namespace Midjourney.Infrastructure.Services
             {
                 return SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "无可用的账号实例");
             }
-            if (!discordInstance.IsIdleQueue)
+            if (!discordInstance.IsIdleQueue())
             {
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, "提交失败，队列已满，请稍后重试");
             }
 
-            task.InstanceId = discordInstance.ChannelId;
-            task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.ChannelId);
+            task.InstanceId = discordInstance.GuildId;
+            task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.GuildId);
 
             var targetTask = _taskStoreService.Get(submitAction.TaskId)!;
             var messageFlags = targetTask.GetProperty<string>(Constants.TASK_PROPERTY_FLAGS, default)?.ToInt() ?? 0;
@@ -603,7 +602,7 @@ namespace Midjourney.Infrastructure.Services
                         SubInstanceId = task.SubInstanceId,
                     };
 
-                    subTask.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.ChannelId);
+                    subTask.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.GuildId);
                     subTask.SetProperty(Constants.TASK_PROPERTY_BOT_TYPE, targetTask.BotType.GetDescription());
 
                     var nonce = SnowFlake.NextId();
@@ -771,7 +770,7 @@ namespace Midjourney.Infrastructure.Services
         /// <returns></returns>
         public SubmitResultVO SubmitModal(TaskInfo task, SubmitModalDTO submitAction, DataUrl dataUrl = null)
         {
-            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(task.SubInstanceId ?? task.InstanceId);
+            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(task.SubInstanceId ?? task.ChannelId);
             if (discordInstance == null)
             {
                 // 如果主实例没有找子实例
@@ -779,7 +778,7 @@ namespace Midjourney.Infrastructure.Services
                 var list = _discordLoadBalancer.GetAliveInstances().ToList();
                 foreach (var item in list)
                 {
-                    if (item.Account.SubChannelValues.ContainsKey(task.SubInstanceId ?? task.InstanceId))
+                    if (item.Account.SubChannelValues.ContainsKey(task.SubInstanceId ?? task.ChannelId))
                     {
                         ids.Add(item.ChannelId);
                     }
@@ -803,13 +802,13 @@ namespace Midjourney.Infrastructure.Services
             {
                 return SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "无可用的账号实例");
             }
-            if (!discordInstance.IsIdleQueue)
+            if (!discordInstance.IsIdleQueue())
             {
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, "提交失败，队列已满，请稍后重试");
             }
 
-            task.InstanceId = discordInstance.ChannelId;
-            task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.ChannelId);
+            task.InstanceId = discordInstance.GuildId;
+            task.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, discordInstance.GuildId);
 
             return discordInstance.SubmitTaskAsync(task, async () =>
             {
@@ -1039,7 +1038,7 @@ namespace Midjourney.Infrastructure.Services
             {
                 return SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "无可用的账号实例");
             }
-            if (!discordInstance.IsIdleQueue)
+            if (!discordInstance.IsIdleQueue())
             {
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, "提交失败，队列已满，请稍后重试");
             }
@@ -1211,7 +1210,7 @@ namespace Midjourney.Infrastructure.Services
                 throw new LogicException("未找到账号实例");
             }
 
-            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(model.ChannelId);
+            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(model.GuildId);
             if (discordInstance == null)
             {
                 throw new LogicException("无可用的账号实例");
@@ -1247,7 +1246,7 @@ namespace Midjourney.Infrastructure.Services
                 throw new LogicException("未找到账号实例");
             }
 
-            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(model.ChannelId);
+            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(model.GuildId);
             if (discordInstance == null)
             {
                 throw new LogicException("无可用的账号实例");
@@ -1358,6 +1357,7 @@ namespace Midjourney.Infrastructure.Services
                                         VerticalDomainIds = new List<string>(),
                                         SubChannels = new List<string>(),
                                         SubChannelValues = new Dictionary<string, string>(),
+                                        ChannelIds = new List<string>(),
 
                                         Id = accountJson.id,
                                     };
@@ -1440,7 +1440,21 @@ namespace Midjourney.Infrastructure.Services
                                         acc = accounts.FirstOrDefault(x => x.Id == aid);
                                         if (acc != null)
                                         {
-                                            taskInfo.InstanceId = acc.ChannelId;
+                                            taskInfo.InstanceId = acc.GuildId;
+                                            taskInfo.ChannelId = acc.ChannelId;
+                                        }
+                                    }
+
+                                    // 子频道消息
+                                    if (!string.IsNullOrWhiteSpace(taskInfo.SubInstanceId) && taskInfo.SubInstanceId != acc.ChannelId)
+                                    {
+                                        if (acc.SubChannelValues.ContainsKey(taskInfo.SubInstanceId ?? taskInfo.InstanceId))
+                                        {
+                                            taskInfo.SubInstanceId = taskInfo.SubInstanceId;
+                                        }
+                                        else
+                                        {
+                                            taskInfo.SubInstanceId = null;
                                         }
                                     }
 
