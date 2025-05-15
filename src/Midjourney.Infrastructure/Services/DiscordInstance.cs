@@ -144,7 +144,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             IWebProxy webProxy,
             ITaskService taskService)
         {
-            _logger = Log.Logger;
+            _logger = Log.Logger.ForContext("LogPrefix", account.GuildId);
 
             var hch = new HttpClientHandler
             {
@@ -2205,11 +2205,11 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
         public Task OnChannelSubscribe(ConcurrentDictionary<string, DiscordExtendedGuild> guilds)
         {
-            Log.Information("ChannelSubscribe 频道事件触发，开始更新频道数据");
+            _logger.Information("ChannelSubscribe 频道事件触发，开始更新频道数据");
             // 匹配对应的服务器
             if (!guilds.TryGetValue(Account.GuildId, out var guild) || guild == null) return Task.CompletedTask;
             var newChannelIds = guild?.Channels.Where(c => c.Type == ChannelType.Text).Select(c => c.Id).ToList();
-            Log.Information("匹配对应的服务器[{0}], 当前频道数为 - [{1}], 频道变更后数量为 - [{2}]", guild.Id,
+            _logger.Information("匹配对应的服务器[{0}], 当前频道数为 - [{1}], 频道变更后数量为 - [{2}]", guild.Id,
                 _channelPool.Count, newChannelIds.Count);
             // 更新账号的 频道id 列表
             Account.ChannelIds = newChannelIds;

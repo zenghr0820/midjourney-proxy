@@ -9,8 +9,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
     /// </summary>
     public class VariationSuccessHandler : MessageHandler
     {
-        public VariationSuccessHandler(ILogger logger)
-            : base(logger)
+        public VariationSuccessHandler()
         {
         }
 

@@ -16,6 +16,8 @@ namespace Midjourney.API
             // 配置 Serilog
             var logger = new LoggerConfiguration()
                 .ReadFrom.Configuration(builder.Services.GetService<IConfiguration>())
+                // 确保输出包含上下文属性
+                .Enrich.FromLogContext()
 
                 // 读取 error.txt
                 .WriteTo.Logger(lc => lc

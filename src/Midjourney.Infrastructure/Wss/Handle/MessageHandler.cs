@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.LoadBalancer;
 using Serilog;
+using Serilog.Context;
 
 namespace Midjourney.Infrastructure.Wss.Handle
 {
@@ -11,15 +12,11 @@ namespace Midjourney.Infrastructure.Wss.Handle
     public abstract class MessageHandler
     {
         protected readonly TaskHandler taskHandler;
-
-        protected ILogger Log { get; }
-
-        private static readonly ConcurrentDictionary<string, ILogger> _loggers = new();
-
-        protected MessageHandler( ILogger logger)
+        
+        protected MessageHandler()
         {
             taskHandler = new TaskHandler();
-            Log = _loggers.GetOrAdd(MessageHandleType, name => new PrefixLogger(logger, name));
+           
         }
 
         /// <summary>
@@ -34,17 +31,20 @@ namespace Midjourney.Infrastructure.Wss.Handle
 
         public void Handle(DiscordInstance instance, MessageType messageType, EventData message)
         {
-            if (MessageParser.IsWaitingToStart(message.Content))
+            using (LogContext.PushProperty("LogPrefix", MessageHandleType))
             {
-                Log.Debug("跳过 Waiting to start 消息 {@0}", message.Id);
-                return;
+                if (MessageParser.IsWaitingToStart(message.Content))
+                {
+                    Log.Debug("跳过 Waiting to start 消息 {@0}", message.Id);
+                    return;
+                }
+
+                Log.Information("开始处理Discord账号[{0}] 的 {1} 消息 - messageId: {@2}", instance.Account.Id, messageType, message.Id);
+
+                var wrapper = new MessageWrapper(message);
+
+                HandleMessage(instance, messageType, wrapper);
             }
-
-            Log.Information("开始处理Discord账号[{0}] 的 {1} 消息 - messageId: {@2}", instance.Account.Id, messageType, message.Id);
-
-            var wrapper = new MessageWrapper(message);
-
-            HandleMessage(instance, messageType, wrapper);
         }
 
         // 子类必须实现的扩展点（可改为 virtual 空方法，若允许部分子类不实现）

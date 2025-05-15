@@ -9,8 +9,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
     /// </summary>
     public class UpscaleSuccessHandler : MessageHandler
     {
-        public UpscaleSuccessHandler(ILogger logger)
-            : base(logger)
+        public UpscaleSuccessHandler()
         {
         }
 

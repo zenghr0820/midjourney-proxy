@@ -5,7 +5,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
     /// <summary>
     /// 通用的错误消息处理程序
     /// </summary>
-    public class ErrorMessageHandler(ILogger logger) : MessageHandler(logger)
+    public class ErrorMessageHandler : MessageHandler
     {
 
         public override int Order() => 2;

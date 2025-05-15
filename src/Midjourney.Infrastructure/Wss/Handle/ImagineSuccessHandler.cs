@@ -7,8 +7,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
     /// </summary>
     public class ImagineSuccessHandler : MessageHandler
     {
-        public ImagineSuccessHandler(ILogger logger)
-            : base(logger)
+        public ImagineSuccessHandler()
         {
         }
 

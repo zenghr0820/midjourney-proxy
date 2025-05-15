@@ -11,7 +11,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
 {
     public class CloudflareHandle : MessageHandler
     {
-        public CloudflareHandle(ILogger logger) : base(logger)
+        public CloudflareHandle()
         {
         }
 

@@ -11,8 +11,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
     public class StartAndProgressHandler : MessageHandler
     {
 
-        public StartAndProgressHandler(ILogger logger)
-            : base(logger)
+        public StartAndProgressHandler()
         {
         }
 

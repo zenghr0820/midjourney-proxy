@@ -19,26 +19,9 @@ public class PrefixLogger : ILogger
     {
         if (logEvent == null) return;
 
-        // 合并前缀到消息模板
-        var originalTemplate = logEvent.MessageTemplate;
-        var prefixedTemplate = new MessageTemplate(
-            $"[{_prefix}] {originalTemplate.Text}",
-            originalTemplate.Tokens
-        );
-
-        // 创建新的 LogEvent（继承原始属性）
-        var newEvent = new LogEvent(
-            logEvent.Timestamp,
-            logEvent.Level,
-            logEvent.Exception,
-            prefixedTemplate,
-            logEvent.Properties
-                .Select(kv => new LogEventProperty(kv.Key, kv.Value))
-                .ToList()
-        );
-
-        // 传递到内部 Logger
-        _innerLogger.Write(newEvent);
+        // 直接使用ForContext添加的上下文属性，不再创建新的LogEvent
+        // 这样可以确保日志前缀能够正确显示在控制台输出中
+        _innerLogger.Write(logEvent);
     }
 
     // 实现其他必要接口方法

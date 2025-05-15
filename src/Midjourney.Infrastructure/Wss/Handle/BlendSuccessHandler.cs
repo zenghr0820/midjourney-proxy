@@ -12,8 +12,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
         private const int MIN_URLS = 2;
         private const int MAX_URLS = 5;
 
-        public BlendSuccessHandler(ILogger logger)
-            : base(logger)
+        public BlendSuccessHandler()
         {
         }
 
