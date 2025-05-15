@@ -3,6 +3,8 @@ using Discord.WebSocket;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.Util;
+using Midjourney.Infrastructure.Wss.Gateway;
+using SocketMessage = Discord.WebSocket.SocketMessage;
 
 namespace Midjourney.Infrastructure.Wss.Handle
 {
@@ -13,7 +15,6 @@ namespace Midjourney.Infrastructure.Wss.Handle
     {
         private readonly SocketMessage _socketMessage;
         private readonly EventData _eventData;
-        private readonly DiscordHelper _discordHelper;
         private readonly bool _isSocketMessage;
         private readonly InteractionMetadata _interactionMetadata;
         private readonly List<EventDataEmbed> _embeds;
@@ -21,10 +22,9 @@ namespace Midjourney.Infrastructure.Wss.Handle
         private readonly List<Component> _components;
         private readonly InteractionUser _author;
 
-        public MessageWrapper(SocketMessage socketMessage, DiscordHelper discordHelper)
+        public MessageWrapper(SocketMessage socketMessage)
         {
             _socketMessage = socketMessage;
-            _discordHelper = discordHelper;
             _isSocketMessage = true;
 
             // 获取交互元数据
@@ -46,10 +46,9 @@ namespace Midjourney.Infrastructure.Wss.Handle
             _author = JsonSerializer.Deserialize<InteractionUser>(JsonSerializer.Serialize(_socketMessage.Author));
         }
 
-        public MessageWrapper(EventData eventData, DiscordHelper discordHelper)
+        public MessageWrapper(EventData eventData)
         {
             _eventData = eventData;
-            _discordHelper = discordHelper;
             _isSocketMessage = false;
 
             // 获取交互元数据
@@ -66,6 +65,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
 
             // 获取作者
             _author = eventData.Author;
+
         }
 
         public string MessageHandler => _isSocketMessage ? "Bot Wss" : "User Wss";
@@ -101,6 +101,10 @@ namespace Midjourney.Infrastructure.Wss.Handle
         public string InteractionId => _interactionMetadata?.Id;
 
         public InteractionMetadata InteractionMetadata => _interactionMetadata;
+
+        public string CustomId => _eventData?.CustomId;
+
+        public PartialApplication Application => _eventData?.Application; 
 
         /// <summary>
         /// 获取完整提示
@@ -168,7 +172,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
         {
             if (string.IsNullOrWhiteSpace(imageUrl)) return imageUrl;
 
-            string cdn = _discordHelper.GetCdn();
+            string cdn = DiscordHelper.GetCdn();
             if (imageUrl.StartsWith(cdn)) return imageUrl;
 
             return imageUrl.Replace(DiscordHelper.DISCORD_CDN_URL, cdn);

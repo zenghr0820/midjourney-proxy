@@ -1,11 +1,11 @@
 using Midjourney.Infrastructure.LoadBalancer;
-
+using Serilog;
 namespace Midjourney.Infrastructure.Wss.Handle
 {
     /// <summary>
     /// 通用的错误消息处理程序
     /// </summary>
-    public class ErrorMessageHandler(DiscordLoadBalancer discordLoadBalancer, DiscordHelper discordHelper) : MessageHandler(discordLoadBalancer, discordHelper)
+    public class ErrorMessageHandler(ILogger logger) : MessageHandler(logger)
     {
 
         public override int Order() => 2;

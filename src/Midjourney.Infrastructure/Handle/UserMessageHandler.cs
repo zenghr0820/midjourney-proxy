@@ -253,7 +253,7 @@ namespace Midjourney.Infrastructure.Handle
         {
             if (string.IsNullOrWhiteSpace(imageUrl)) return imageUrl;
 
-            string cdn = discordHelper.GetCdn();
+            string cdn = DiscordHelper.GetCdn();
             if (imageUrl.StartsWith(cdn)) return imageUrl;
 
             return imageUrl.Replace(DiscordHelper.DISCORD_CDN_URL, cdn);

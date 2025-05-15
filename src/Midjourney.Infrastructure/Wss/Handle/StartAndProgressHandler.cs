@@ -10,10 +10,9 @@ namespace Midjourney.Infrastructure.Wss.Handle
     /// </summary>
     public class StartAndProgressHandler : MessageHandler
     {
-        private const string PROGRESS_PATTERN = "\\((\\d+)%\\)";
 
-        public StartAndProgressHandler(DiscordLoadBalancer discordLoadBalancer, DiscordHelper discordHelper)
-            : base(discordLoadBalancer, discordHelper)
+        public StartAndProgressHandler(ILogger logger)
+            : base(logger)
         {
         }
 
@@ -26,6 +25,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
         /// </summary>
         protected override void HandleMessage(DiscordInstance instance, MessageType messageType, MessageWrapper message)
         {
+            Log.Information("Start-And-Progress-Handler - Handling message:{0} {1}",MessageHandleType, messageType);
             try
             {
 

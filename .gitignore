@@ -373,3 +373,5 @@ temps
 
 # vscode
 .vscode
+#. idea
+.idea

@@ -1032,7 +1032,7 @@ namespace Midjourney.API.Controllers
 
             foreach (var item in list)
             {
-                var inc = _loadBalancer.GetDiscordInstance(item.ChannelId);
+                var inc = _loadBalancer.GetDiscordInstance(item.GuildId);
 
                 item.RunningCount = inc?.GetRunningFutures().Count ?? 0;
                 item.QueueCount = inc?.GetQueueTasks().Count ?? 0;
@@ -1125,7 +1125,7 @@ namespace Midjourney.API.Controllers
 
             foreach (var item in list)
             {
-                var inc = _loadBalancer.GetDiscordInstance(item.ChannelId);
+                var inc = _loadBalancer.GetDiscordInstance(item.GuildId);
 
                 // 当前执行中的任务数
                 item.RunningCount = inc?.GetRunningFutures().Count ?? 0;

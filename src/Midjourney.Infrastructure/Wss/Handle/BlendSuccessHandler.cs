@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Midjourney.Infrastructure.LoadBalancer;
+using Serilog;
 
 namespace Midjourney.Infrastructure.Wss.Handle
 {
@@ -11,8 +12,8 @@ namespace Midjourney.Infrastructure.Wss.Handle
         private const int MIN_URLS = 2;
         private const int MAX_URLS = 5;
 
-        public BlendSuccessHandler(DiscordLoadBalancer discordLoadBalancer, DiscordHelper discordHelper)
-            : base(discordLoadBalancer, discordHelper)
+        public BlendSuccessHandler(ILogger logger)
+            : base(logger)
         {
         }
 

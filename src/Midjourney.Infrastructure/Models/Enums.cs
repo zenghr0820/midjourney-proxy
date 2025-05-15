@@ -313,7 +313,16 @@ namespace Midjourney.Infrastructure
         /// <summary>
         ///
         /// </summary>
-        INTERACTION_MODAL_CREATE
+        INTERACTION_MODAL_CREATE,
+        
+        READY,
+        RESUMED,
+        GUILD_CREATE,
+        GUILD_UPDATE,
+        GUILD_DELETE,
+        CHANNEL_CREATE,
+        CHANNEL_UPDATE,
+        CHANNEL_DELETE
     }
 
     /// <summary>
@@ -344,6 +353,14 @@ namespace Midjourney.Infrastructure
                 "INTERACTION_SUCCESS" => MessageType.INTERACTION_SUCCESS,
                 "INTERACTION_IFRAME_MODAL_CREATE" => MessageType.INTERACTION_IFRAME_MODAL_CREATE,
                 "INTERACTION_MODAL_CREATE" => MessageType.INTERACTION_MODAL_CREATE,
+                "READY" => MessageType.READY,
+                "RESUMED" => MessageType.RESUMED,
+                "GUILD_CREATE" => MessageType.GUILD_CREATE,
+                "GUILD_DELETE" => MessageType.GUILD_DELETE,
+                "GUILD_UPDATE" => MessageType.GUILD_UPDATE,
+                "CHANNEL_CREATE" => MessageType.CHANNEL_CREATE,
+                "CHANNEL_UPDATE" => MessageType.CHANNEL_UPDATE,
+                "CHANNEL_DELETE" => MessageType.CHANNEL_DELETE,
                 _ => null
             };
         }
@@ -409,6 +426,108 @@ namespace Midjourney.Infrastructure
         /// SQL Server
         /// </summary>
         SQLServer = 6
+    }
+    
+    /// <summary>
+    /// Discord 频道类型
+    /// </summary>
+    public enum ChannelType
+    {
+        /// <summary>
+        ///     The channel is a text channel.
+        /// </summary>
+        Text = 0,
+
+        /// <summary>
+        ///     The channel is a Direct Message channel.
+        /// </summary>
+        DM = 1,
+
+        /// <summary>
+        ///     The channel is a voice channel.
+        /// </summary>
+        Voice = 2,
+
+        /// <summary>
+        ///     The channel is a group channel.
+        /// </summary>
+        Group = 3,
+
+        /// <summary>
+        ///     The channel is a category channel.
+        /// </summary>
+        Category = 4,
+
+        /// <summary>
+        ///     The channel is a news channel.
+        /// </summary>
+        News = 5,
+
+        /// <summary>
+        ///     The channel is a store channel.
+        /// </summary>
+        Store = 6,
+
+        /// <summary>
+        ///     The channel is a temporary thread channel under a news channel.
+        /// </summary>
+        NewsThread = 10,
+
+        /// <summary>
+        ///     The channel is a temporary thread channel under a text channel.
+        /// </summary>
+        PublicThread = 11,
+
+        /// <summary>
+        ///     The channel is a private temporary thread channel under a text channel.
+        /// </summary>
+        PrivateThread = 12,
+
+        /// <summary>
+        ///     The channel is a stage voice channel.
+        /// </summary>
+        Stage = 13,
+
+        /// <summary>
+        ///     The channel is a guild directory used in hub servers. (Unreleased)
+        /// </summary>
+        GuildDirectory = 14,
+
+        /// <summary>
+        ///     The channel is a forum channel containing multiple threads.
+        /// </summary>
+        Forum = 15,
+
+        /// <summary>
+        ///     The channel is a media channel containing multiple threads.
+        /// </summary>
+        Media = 16,
+    }
+    
+    /// <summary>
+    ///     Represents public flags for a channel.
+    /// </summary>
+    public enum ChannelFlags
+    {
+        /// <summary> 
+        ///     Default value for flags, when none are given to a channel.
+        /// </summary>
+        None = 0,
+
+        /// <summary>
+        ///      Flag given to a thread channel pinned on top of parent forum channel.
+        /// </summary>
+        Pinned = 1 << 1,
+
+        /// <summary>
+        ///     Flag given to a forum or media channel that requires people to select tags when posting.
+        /// </summary>
+        RequireTag = 1 << 4,
+
+        /// <summary>
+        ///     Flag given to a media channel that hides the embedded media download options.
+        /// </summary>
+        HideMediaDownloadOption = 1 << 15,
     }
 
     public static class BlendDimensionsExtensions

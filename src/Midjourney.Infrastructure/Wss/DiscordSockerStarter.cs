@@ -3,14 +3,17 @@ using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.LoadBalancer;
 using Midjourney.Infrastructure.Util;
+using Midjourney.Infrastructure.Wss.Gateway;
 using Midjourney.Infrastructure.Wss.Handle;
 using Serilog;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using UAParser;
 
 namespace Midjourney.Infrastructure.Wss
@@ -18,7 +21,7 @@ namespace Midjourney.Infrastructure.Wss
     /// <summary>
     /// User WebSocket启动器，实现WebSocketStarter和IDiscordInstanceProvider接口
     /// </summary>
-    public class DiscordSockerStarter : IWebSocketStarter, IDiscordInstanceProvider, IDisposable
+    public partial class DiscordSockerStarter : IWebSocketStarter, IDiscordInstanceProvider, IDisposable
     {
 
         /// <summary>
@@ -99,11 +102,6 @@ namespace Midjourney.Infrastructure.Wss
         public bool IsRunning { get; private set; }
 
         /// <summary>
-        /// 消息处理器
-        /// </summary>
-        private MessageProcessor _messageProcessor;
-
-        /// <summary>
         /// 获取当前连接状态
         /// </summary>
         public ConnectionState ConnectionState
@@ -113,7 +111,7 @@ namespace Midjourney.Infrastructure.Wss
             {
                 if (_connectionState != value)
                 {
-                    _logger.Information("连接状态变更: {0} -> {1} ({2})", _connectionState, value, Account?.ChannelId);
+                    _logger.Information("连接状态变更: {0} -> {1} ({2})", _connectionState, value, Account?.GuildId);
                     _connectionState = value;
                 }
             }
@@ -128,7 +126,7 @@ namespace Midjourney.Infrastructure.Wss
         /// <param name="messageHandlers"></param>
         /// <param name="memoryCache">内存缓存</param>
         /// <param name="config">WebSocket配置</param>
-        public  DiscordSockerStarter(
+        public DiscordSockerStarter(
             DiscordHelper discordHelper,
             WebProxy webProxy,
             DiscordInstance discordInstance,
@@ -143,9 +141,21 @@ namespace Midjourney.Infrastructure.Wss
             _config = config ?? new WebSocketConfig();
 
             _logger = Log.Logger;
+            _logContext = Account.GuildId;
 
-            // 初始化消息处理器
-            _messageProcessor = new MessageProcessor(Account?.ChannelId ?? "unknown", messageHandlers, discordInstance);
+            _properties = GlobalConfiguration.Setting;
+
+            _cancellationTokenSource = new CancellationTokenSource();
+            _processingTask = Task.Run(ProcessMessages, _cancellationTokenSource.Token);
+
+            // 创建无界Channel
+            _messageChannel = Channel.CreateUnbounded<JsonElement>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = false
+            });
+
+            _messageHandlers = messageHandlers;
         }
 
         private DiscordAccount Account => _discordInstance?.Account;
@@ -219,7 +229,7 @@ namespace Midjourney.Infrastructure.Wss
                     WebSocket.Options.SetRequestHeader("Sec-WebSocket-Extensions", "permessage-deflate; client_max_window_bits");
 
                     // 获取网关地址
-                    var gatewayUrl = GetGatewayServer(reconnect ? _resumeGatewayUrl : null) + "/?encoding=json&v=9&compress=zlib-stream";
+                    var gatewayUrl = FormatGatewayUrl(reconnect ? _resumeGatewayUrl : null);
 
                     // 重新连接
                     if (reconnect && !string.IsNullOrWhiteSpace(_sessionId) && _sequence.HasValue)
@@ -265,11 +275,31 @@ namespace Midjourney.Infrastructure.Wss
         /// <summary>
         /// 获取网关
         /// </summary>
-        /// <param name="resumeGatewayUrl">恢复网关URL</param>
+        /// <param name="gatewayUrl">恢复网关URL</param>
         /// <returns>网关URL</returns>
-        private string GetGatewayServer(string resumeGatewayUrl = null)
+        private string FormatGatewayUrl(string gatewayUrl = null)
         {
-            return !string.IsNullOrWhiteSpace(resumeGatewayUrl) ? resumeGatewayUrl : _discordHelper.GetWss();
+            var url = !string.IsNullOrWhiteSpace(gatewayUrl) ? gatewayUrl : _discordHelper.GetWss();
+            return $"{url}?v={DiscordHelper.API_VERSION}&encoding={DiscordHelper.GatewayEncoding}&compress=zlib-stream";
+        }
+
+        /// <summary>
+        ///  订阅Ready事件触发 
+        /// </summary>
+        /// <param name="readyEvent"></param>
+        private void OnReady(DiscordReadyEvent readyEvent)
+        {
+            _resumeGatewayUrl = readyEvent.ResumeGatewayUrl;
+            _sessionId = readyEvent.SessionId;
+            OnSocketSuccess();
+        }
+
+        /// <summary>
+        /// 订阅Resumed事件触发
+        /// </summary>
+        private void OnResumed()
+        {
+            OnSocketSuccess();
         }
 
         /// <summary>
@@ -526,7 +556,7 @@ namespace Midjourney.Infrastructure.Wss
                 //  Discord.GatewayIntents intents = Discord.GatewayIntents.AllUnprivileged &
                 //                        ~(Discord.GatewayIntents.GuildScheduledEvents | Discord.GatewayIntents.GuildInvites) |
                 //                        Discord.GatewayIntents.MessageContent,
-                token =  GetPrefixedToken()
+                token = GetPrefixedToken()
             };
 
             _logger.Information("用户创建授权信息 {@0}", authData.token);
@@ -623,8 +653,8 @@ namespace Midjourney.Infrastructure.Wss
 
                     case GatewayOpCode.Dispatch:
                         {
-                            _logger.Information("用户 Received Dispatch {@0}, {@1}", type, Account.ChannelId);
-                            HandleDispatch(payload);
+                            _logger.Information("用户 Received Dispatch {@0}, {@1}", type, Account.GuildId);
+                            await HandleDispatch(payload);
                         }
                         break;
 
@@ -695,49 +725,64 @@ namespace Midjourney.Infrastructure.Wss
         /// 处理分派消息
         /// </summary>
         /// <param name="data">消息数据</param>
-        private void HandleDispatch(JsonElement data)
+        private async Task HandleDispatch(JsonElement data)
         {
-
-            _logger.Debug("HandleDispatch {@0}", data.ToString());
+            _logger.Debug("HandleDispatch => {@0}", data.ToString());
+            #region Connection
             if (data.TryGetProperty("t", out var t) && t.GetString() == "READY")
             {
                 _sessionId = data.GetProperty("d").GetProperty("session_id").GetString();
-                _resumeGatewayUrl = data.GetProperty("d").GetProperty("resume_gateway_url").GetString() + "/?encoding=json&v=9&compress=zlib-stream";
-
+                _resumeGatewayUrl = data.GetProperty("d").GetProperty("resume_gateway_url").GetString();
+                
                 OnSocketSuccess();
+
+                if (!data.TryGetProperty("d", out JsonElement payload))
+                {
+                    return;
+                }
+                
+                // 获取服务器ID
+                if (payload.TryGetProperty("guilds", out JsonElement guildsElement))
+                {
+                    _logger.Debug("- Try Get Guilds -");
+                    var guilds = guildsElement.Deserialize<DiscordExtendedGuild[]>();
+                    foreach (var guild in guilds)
+                    {
+                        if (guild == null) continue;
+                        _logger.Debug("Get Guild[{@0}] - ChannelIds => {@1}", guild?.Id, guild?.Channels.Length);
+                        _guilds.AddOrUpdate(guild.Id, guild, (id, old) => guild);
+                    }
+                }
+                _logger.Information("当前账号下的服务器数 [{@0}] - {@1}", _guilds.Count, string.Join(", ", _guilds.Keys));
+                // 获取私信频道列表
+                if (payload.TryGetProperty("private_channels", out JsonElement dmChannelElement))
+                {
+                    _logger.Debug("- Try Get DM Channels -");
+                    var dmChannels = dmChannelElement.Deserialize<DiscordChannelDto[]>();
+                    foreach (var channel in dmChannels)
+                    {
+                        if (channel == null) continue;
+                        _logger.Debug("Get DM Channel ID[{@0}] - Name => {@1}", channel?.Id, channel?.Name);
+                        _dmChannels.AddOrUpdate(channel.Id, channel, (id, old) => channel);
+                    }
+                }
+                _logger.Information("当前账号下的私信频道数 [{@0}] - {@1}", _dmChannels.Count, string.Join(", ", _dmChannels.Keys));
+                
+                // // 事件订阅
+                // await _readyEvent.InvokeAsync(readyEvent);
+                // // 频道订阅
+                // await _guildSubscribeEvent.InvokeAsync(_guilds);
+                await _channelSubscribeEvent.InvokeAsync(_guilds);
             }
             else if (data.TryGetProperty("t", out var resumed) && resumed.GetString() == "RESUMED")
             {
                 OnSocketSuccess();
+                await _resumedEvent.InvokeAsync();
             }
+            #endregion
             else
             {
-                // // 获取消息类型
-                // var messageType = MessageType.CREATE;
-                // if (data.TryGetProperty("t", out var eventType))
-                // {
-                //     string eventTypeName = eventType.GetString();
-                //     if (eventTypeName == "MESSAGE_UPDATE")
-                //     {
-                //         messageType = MessageType.UPDATE;
-                //     }
-                //     else if (eventTypeName == "MESSAGE_DELETE")
-                //     {
-                //         messageType = MessageType.DELETE;
-                //     }
-                // }
-                
-                // // 使用消息处理器进行处理
-                // if (data.TryGetProperty("d", out var eventData))
-                // {
-                //     var eventDataObj = JsonSerializer.Deserialize<EventData>(eventData.GetRawText());
-                //     if (eventDataObj != null)
-                //     {
-                //         _messageProcessor.EnqueueUserMessage(eventDataObj, messageType);
-                //     }
-                // }
-
-                _messageProcessor.EnqueueMessage(data);
+                EnqueueMessage(data);
             }
         }
 
@@ -1034,6 +1079,10 @@ namespace Midjourney.Infrastructure.Wss
                 catch
                 {
                 }
+
+                // // 释放消息处理器
+                // MessageProcessorDispose();
+
             }
             catch
             {
@@ -1079,8 +1128,8 @@ namespace Midjourney.Infrastructure.Wss
                 CloseSocket();
 
                 // 释放消息处理器
-                _messageProcessor?.Dispose();
-                _messageProcessor = null;
+                MessageProcessorDispose();
+                // _messageProcessor = null;
 
                 _heartbeatService?.Dispose();
             }

@@ -16,6 +16,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 using EventData = Midjourney.Infrastructure.Dto.EventData;
+using SocketMessage = Discord.WebSocket.SocketMessage;
 
 namespace Midjourney.Infrastructure
 {

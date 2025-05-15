@@ -1,5 +1,6 @@
 
 using Midjourney.Infrastructure.LoadBalancer;
+using Serilog;
 
 namespace Midjourney.Infrastructure.Wss.Handle
 {
@@ -8,8 +9,8 @@ namespace Midjourney.Infrastructure.Wss.Handle
     /// </summary>
     public class VariationSuccessHandler : MessageHandler
     {
-        public VariationSuccessHandler(DiscordLoadBalancer discordLoadBalancer, DiscordHelper discordHelper)
-            : base(discordLoadBalancer, discordHelper)
+        public VariationSuccessHandler(ILogger logger)
+            : base(logger)
         {
         }
 

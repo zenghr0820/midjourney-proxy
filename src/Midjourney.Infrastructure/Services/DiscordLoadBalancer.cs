@@ -60,13 +60,13 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 var instanceWithChannel = GetAliveInstances()
                     .Where(instance => instance.AllChannelIds.Contains(channelId))
                     .FirstOrDefault();
-                
+
                 if (instanceWithChannel != null)
                 {
                     return instanceWithChannel;
                 }
             }
-            
+
             if (!string.IsNullOrWhiteSpace(accountFilter?.InstanceId))
             {
                 // 获取指定 ID 的实例
@@ -232,7 +232,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
                     // 过滤指定账号
                     .WhereIf(ids?.Count > 0, c => ids.Contains(c.Account.ChannelId))
-                    
+
                     // 如果指定了频道ID，则过滤包含该频道的实例
                     .WhereIf(!string.IsNullOrWhiteSpace(channelId), c => c.AllChannelIds.Contains(channelId))
                     .ToList();
@@ -244,24 +244,25 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// 获取指定ID的实例（不判断是否存活）
         /// </summary>
-        /// <param name="channelId">实例ID/渠道ID</param>
+        /// <param name="instanceId">实例ID/渠道ID</param>
         /// <returns>实例。</returns>
-        public DiscordInstance GetDiscordInstance(string channelId)
+        public DiscordInstance GetDiscordInstance(string instanceId)
         {
-            if (string.IsNullOrWhiteSpace(channelId))
+            if (string.IsNullOrWhiteSpace(instanceId))
             {
                 return null;
             }
 
             // 先检查是否有实例的主频道ID匹配
-            var instance = _instances.FirstOrDefault(c => c.ChannelId == channelId);
+            var instance = _instances.FirstOrDefault(c => c.GuildId == instanceId);
             if (instance != null)
             {
                 return instance;
             }
 
             // 如果没有找到，检查是否有实例包含此频道ID
-            return _instances.FirstOrDefault(c => c.AllChannelIds.Contains(channelId));
+            // return _instances.FirstOrDefault(c => c.AllChannelIds.Contains(channelId));
+            return null;
         }
 
         /// <summary>
@@ -285,6 +286,36 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
             // 如果没有找到，检查是否有存活实例包含此频道ID
             return _instances.FirstOrDefault(c => c.AllChannelIds.Contains(instanceId) && c.IsAlive);
+        }
+
+        /// <summary>
+        /// 获取指定频道ID的实例 
+        /// </summary>
+        /// <param name="channelId">频道ID</param>
+        /// <param name="isAlive">是否存活</param>
+        /// <returns>实例。</returns>
+        public DiscordInstance GetDiscordInstanceByChannelId(string channelId, bool isAlive = false)
+        {
+            if (string.IsNullOrWhiteSpace(channelId))
+            {
+                return null;
+            }
+
+            DiscordInstance instance = null;
+            // 先检查是否有存活实例的主频道ID匹配
+            if (isAlive)
+            {
+                instance = _instances.FirstOrDefault(c => c.ChannelId == channelId && c.IsAlive);
+                // 如果没有找到，检查是否有存活实例包含此频道ID
+                instance ??= _instances.FirstOrDefault(c => c.AllChannelIds.Contains(channelId) && c.IsAlive);
+            }
+            else
+            {
+                instance = _instances.FirstOrDefault(c => c.ChannelId == channelId);
+                instance ??= _instances.FirstOrDefault(c => c.AllChannelIds.Contains(channelId));
+            }
+
+            return instance;
         }
 
         /// <summary>

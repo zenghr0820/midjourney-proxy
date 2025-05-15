@@ -1,5 +1,6 @@
 ﻿
 using System.Text.Json.Serialization;
+using Midjourney.Infrastructure.Wss.Gateway;
 
 namespace Midjourney.Infrastructure.Dto
 {
@@ -135,6 +136,12 @@ namespace Midjourney.Infrastructure.Dto
         public string Content { get; set; }
 
         /// <summary>
+        /// 组件
+        /// </summary>
+        [JsonPropertyName("custom_id")]
+        public string CustomId { get; set; }
+        
+        /// <summary>
         /// 组件列表。
         /// </summary>
         [JsonPropertyName("components")]
@@ -169,6 +176,9 @@ namespace Midjourney.Infrastructure.Dto
         /// </summary>
         [JsonPropertyName("guild_id")]
         public string GuildId { get; set; }
+
+        [JsonPropertyName("application")]
+        public PartialApplication Application { get; set; }
     }
 
     public class EventDataEmbed
@@ -197,6 +207,7 @@ namespace Midjourney.Infrastructure.Dto
 
         [JsonPropertyName("footer")]
         public EventDataEmbedFooter Footer { get; set; }
+
     }
 
     public class EventDataEmbedFooter

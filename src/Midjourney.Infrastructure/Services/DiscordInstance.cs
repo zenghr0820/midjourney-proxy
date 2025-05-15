@@ -10,6 +10,7 @@ using Midjourney.Infrastructure.Services;
 using Midjourney.Infrastructure.Storage;
 using Midjourney.Infrastructure.Util;
 using Midjourney.Infrastructure.Wss;
+using Midjourney.Infrastructure.Wss.Gateway;
 using Newtonsoft.Json.Linq;
 using Serilog;
 using ILogger = Serilog.ILogger;
@@ -215,6 +216,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     Account.QueueSize,
                     Math.Max(1, Math.Min(Account.CoreSize, 12))
                 );
+                channel.GuildId = Account.GuildId;
                 _channelPool.TryAdd(channelId, channel);
             }
         }
@@ -507,35 +509,38 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <returns>可用的频道ID</returns>
         public string GetAvailableChannelId(string preferredChannelId = null)
         {
-            // 1. 如果指定了频道ID且该频道存在，优先使用
-            if (!string.IsNullOrWhiteSpace(preferredChannelId) && _channelPool.ContainsKey(preferredChannelId))
+
+            // 1. 检查优先频道是否可用
+            if (!string.IsNullOrWhiteSpace(preferredChannelId) 
+                && _channelPool.TryGetValue(preferredChannelId, out var preferredChannel) 
+                && preferredChannel is { Enable: true, IsIdleQueue: true })
             {
-                var preferredChannel = _channelPool[preferredChannelId];
-                if (preferredChannel.Enable && preferredChannel.IsIdleQueue)
-                {
-                    return preferredChannelId;
-                }
+                LogChannelSelection(preferredChannelId, isPreferred: true);
+                return preferredChannelId;
             }
 
-
-            // 3. 根据规则选择空闲频道
-            var availableChannels = _channelPool.Values
+            // 2. 选择最空闲的频道
+            var selectedChannel = _channelPool.Values
                 .Where(c => c.Enable && c.IsIdleQueue)
-                .ToList();
-
-            if (availableChannels.Count == 0)
-            {
-                // 没有可用频道，返回主频道（即使它可能已满）
-                return _primaryChannelId;
-            }
-
-            // 选择队列任务最少的频道
-            var channelWithLeastTasks = availableChannels
                 .OrderBy(c => c.QueueTasks.Count)
                 .ThenBy(c => c.RunningTasks.Count)
                 .FirstOrDefault();
 
-            return channelWithLeastTasks?.ChannelId ?? _primaryChannelId;
+            var finalChannelId = selectedChannel?.ChannelId ?? preferredChannelId;
+            LogChannelSelection(finalChannelId, isPreferred: false);
+    
+            return finalChannelId;
+        }
+        
+        /// <summary>
+        /// 记录频道选择日志（结构化日志）
+        /// </summary>
+        private void LogChannelSelection(string channelId, bool isPreferred)
+        {
+            _logger.Information(
+                "频道选择结果 - 服务器: {GuildId}, 是否优先频道: {IsPreferred}, 最终频道: {ChannelId}",
+                GuildId, isPreferred, channelId
+            );
         }
 
         /// <summary>
@@ -548,6 +553,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         public SubmitResultVO SubmitTaskAsync(TaskInfo info, Func<Task<Message>> discordSubmit, string channelId = null)
         {
             var channel = GetChannel(channelId);
+            _logger.Information("选择的频道为：{0}, {1}", channel?.GuildId, channel?.ChannelId);
             if (channel == null)
             {
                 return SubmitResultVO.Fail(ReturnCode.FAILURE, $"提交失败，频道 {channelId} 不存在")
@@ -565,6 +571,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             info.InstanceId = channel.GuildId;
             info.ChannelId = channel.ChannelId;
             info.SetProperty(Constants.TASK_PROPERTY_DISCORD_CHANNEL_ID, channel.ChannelId);
+            info.SetProperty(Constants.TASK_PROPERTY_DISCORD_INSTANCE_ID, Account.GuildId);
             _taskStoreService.Save(info);
 
             try
@@ -985,7 +992,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             prompt = GetPrompt(prompt, info);
 
             var json = (info.RealBotType ?? info.BotType) == EBotType.MID_JOURNEY ? _paramsMap["imagine"] : _paramsMap["imagineniji"];
-            var paramsStr = ReplaceInteractionParams(json, nonce);
+            var paramsStr = ReplaceInteractionParams(json, nonce, null, null, info.ChannelId);
 
             JObject paramsJson = JObject.Parse(paramsStr);
             paramsJson["data"]["options"][0]["value"] = prompt;
@@ -1153,12 +1160,12 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// 执行 info 操作
         /// </summary>
-        public async Task<Message> InfoAsync(string nonce, EBotType botType)
+        public async Task<Message> InfoAsync(string nonce, EBotType botType, string channelId = null)
         {
 
             var content = botType == EBotType.MID_JOURNEY ? _paramsMap["info"] : _paramsMap["infoniji"];
 
-            var paramsStr = ReplaceInteractionParams(content, nonce);
+            var paramsStr = ReplaceInteractionParams(content, nonce, null, null, channelId);
             var obj = JObject.Parse(paramsStr);
             paramsStr = obj.ToString();
             return await PostJsonAndCheckStatusAsync(paramsStr);
@@ -1213,7 +1220,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
             var content = botType == EBotType.NIJI_JOURNEY ? _paramsMap["settingniji"] : _paramsMap["setting"];
 
-            var paramsStr = ReplaceInteractionParams(content, nonce, null, channelId);
+            var paramsStr = ReplaceInteractionParams(content, nonce, null, null, channelId);
 
             return await PostJsonAndCheckStatusAsync(paramsStr);
         }
@@ -1226,7 +1233,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
             var content = botType == EBotType.MID_JOURNEY ? _paramsMap["show"] : _paramsMap["showniji"];
 
-            var paramsStr = ReplaceInteractionParams(content, nonce, null, channelId)
+            var paramsStr = ReplaceInteractionParams(content, nonce, null, null, channelId)
                 .Replace("$value", jobId);
 
             return await PostJsonAndCheckStatusAsync(paramsStr);
@@ -1379,7 +1386,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         {
 
             var json = botType == EBotType.NIJI_JOURNEY ? _paramsMap["describenijilink"] : _paramsMap["describelink"];
-            string paramsStr = ReplaceInteractionParams(json, nonce, null, channelId)
+            string paramsStr = ReplaceInteractionParams(json, nonce, null, null, channelId)
                 .Replace("$link", link);
             return await PostJsonAndCheckStatusAsync(paramsStr);
         }
@@ -1393,7 +1400,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             prompt = GetPrompt(prompt, info);
 
             var json = botType == EBotType.MID_JOURNEY || prompt.Contains("--niji") ? _paramsMap["shorten"] : _paramsMap["shortenniji"];
-            var paramsStr = ReplaceInteractionParams(json, nonce, null, info.ChannelId);
+            var paramsStr = ReplaceInteractionParams(json, nonce, null, null, info.ChannelId);
 
             var obj = JObject.Parse(paramsStr);
             obj["data"]["options"][0]["value"] = prompt;
@@ -1410,7 +1417,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
             var json = botType == EBotType.MID_JOURNEY || GlobalConfiguration.Setting.EnableConvertNijiToMj ? _paramsMap["blend"] : _paramsMap["blendniji"];
 
-            string paramsStr = ReplaceInteractionParams(json, nonce, null, channelId);
+            string paramsStr = ReplaceInteractionParams(json, nonce, null, null, channelId);
             JObject paramsJson = JObject.Parse(paramsStr);
             JArray options = (JArray)paramsJson["data"]["options"];
             JArray attachments = (JArray)paramsJson["data"]["attachments"];
@@ -1631,7 +1638,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     // 当前时间转为 Unix 时间戳
                     // 今日 0 点 Unix 时间戳
                     var now = new DateTimeOffset(DateTime.Now.Date).ToUnixTimeMilliseconds();
-                    var count = (int)DbHelper.Instance.TaskStore.Count(c => c.SubmitTime >= now && c.InstanceId == Account.ChannelId);
+                    var count = (int)DbHelper.Instance.TaskStore.Count(c => c.SubmitTime >= now && c.InstanceId == Account.GuildId);
 
                     if (Account.DayDrawCount != count)
                     {
@@ -1671,7 +1678,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             }
 
             var json = botType == EBotType.MID_JOURNEY ? _paramsMap["fast"] : _paramsMap["fastniji"];
-            var paramsStr = ReplaceInteractionParams(json, nonce, null, channelId);
+            var paramsStr = ReplaceInteractionParams(json, nonce, null, null, channelId);
             var obj = JObject.Parse(paramsStr);
             paramsStr = obj.ToString();
             return await PostJsonAndCheckStatusAsync(paramsStr);
@@ -1698,7 +1705,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             }
 
             var json = botType == EBotType.NIJI_JOURNEY ? _paramsMap["relax"] : _paramsMap["relaxniji"];
-            var paramsStr = ReplaceInteractionParams(json, nonce, null, channelId);
+            var paramsStr = ReplaceInteractionParams(json, nonce, null, null, channelId);
             var obj = JObject.Parse(paramsStr);
             paramsStr = obj.ToString();
             return await PostJsonAndCheckStatusAsync(paramsStr);
@@ -2194,6 +2201,24 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 return $"Bot {Account.BotToken}";
             }
             return Account.UserToken;
+        }
+
+        public Task OnChannelSubscribe(ConcurrentDictionary<string, DiscordExtendedGuild> guilds)
+        {
+            Log.Information("ChannelSubscribe 频道事件触发，开始更新频道数据");
+            // 匹配对应的服务器
+            if (!guilds.TryGetValue(Account.GuildId, out var guild) || guild == null) return Task.CompletedTask;
+            var newChannelIds = guild?.Channels.Where(c => c.Type == ChannelType.Text).Select(c => c.Id).ToList();
+            Log.Information("匹配对应的服务器[{0}], 当前频道数为 - [{1}], 频道变更后数量为 - [{2}]", guild.Id,
+                _channelPool.Count, newChannelIds.Count);
+            // 更新账号的 频道id 列表
+            Account.ChannelIds = newChannelIds;
+            DbHelper.Instance.AccountStore.Update(Account);
+            ClearAccountCache(Account.Id);
+            // 更新频道数据
+            UpdateChannelPool(newChannelIds);
+
+            return Task.CompletedTask;
         }
 
         /// <summary>

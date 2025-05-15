@@ -10,8 +10,8 @@ namespace Midjourney.Infrastructure.Wss.Handle
     /// </summary>
     public class RerollSuccessHandler : MessageHandler
     {
-        public RerollSuccessHandler(DiscordLoadBalancer discordLoadBalancer, DiscordHelper discordHelper)
-            : base(discordLoadBalancer, discordHelper)
+        public RerollSuccessHandler(ILogger logger)
+            : base(logger)
         {
         }
 

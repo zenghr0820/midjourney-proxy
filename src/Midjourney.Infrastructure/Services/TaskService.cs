@@ -1144,22 +1144,25 @@ namespace Midjourney.Infrastructure.Services
                 throw new LogicException("未找到账号实例");
             }
 
-            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(model.ChannelId);
+            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(model.GuildId);
             if (discordInstance == null)
             {
                 throw new LogicException("无可用的账号实例");
             }
 
+            // 获取发送的频道
+            var channelId = discordInstance.GetAvailableChannelId();
+
             if (discordInstance.Account.EnableMj == true)
             {
-                var res3 = await discordInstance.SettingAsync(SnowFlake.NextId(), EBotType.MID_JOURNEY);
+                var res3 = await discordInstance.SettingAsync(SnowFlake.NextId(), EBotType.MID_JOURNEY, channelId);
                 if (res3.Code != ReturnCode.SUCCESS)
                 {
                     throw new LogicException(res3.Description);
                 }
                 Thread.Sleep(2500);
 
-                var res0 = await discordInstance.InfoAsync(SnowFlake.NextId(), EBotType.MID_JOURNEY);
+                var res0 = await discordInstance.InfoAsync(SnowFlake.NextId(), EBotType.MID_JOURNEY, channelId);
                 if (res0.Code != ReturnCode.SUCCESS)
                 {
                     throw new LogicException(res0.Description);
@@ -1174,14 +1177,14 @@ namespace Midjourney.Infrastructure.Services
                     // 如果没有开启 NIJI 转 MJ
                     if (GlobalConfiguration.Setting.EnableConvertNijiToMj == false)
                     {
-                        var res2 = await discordInstance.SettingAsync(SnowFlake.NextId(), EBotType.NIJI_JOURNEY);
+                        var res2 = await discordInstance.SettingAsync(SnowFlake.NextId(), EBotType.NIJI_JOURNEY, channelId);
                         if (res2.Code != ReturnCode.SUCCESS)
                         {
                             throw new LogicException(res2.Description);
                         }
                         Thread.Sleep(2500);
 
-                        var res = await discordInstance.InfoAsync(SnowFlake.NextId(), EBotType.NIJI_JOURNEY);
+                        var res = await discordInstance.InfoAsync(SnowFlake.NextId(), EBotType.NIJI_JOURNEY, channelId);
                         if (res.Code != ReturnCode.SUCCESS)
                         {
                             throw new LogicException(res.Description);
@@ -1440,21 +1443,8 @@ namespace Midjourney.Infrastructure.Services
                                         acc = accounts.FirstOrDefault(x => x.Id == aid);
                                         if (acc != null)
                                         {
-                                            taskInfo.InstanceId = acc.GuildId;
+                                            taskInfo.InstanceId = acc.ChannelId;
                                             taskInfo.ChannelId = acc.ChannelId;
-                                        }
-                                    }
-
-                                    // 子频道消息
-                                    if (!string.IsNullOrWhiteSpace(taskInfo.SubInstanceId) && taskInfo.SubInstanceId != acc.ChannelId)
-                                    {
-                                        if (acc.SubChannelValues.ContainsKey(taskInfo.SubInstanceId ?? taskInfo.InstanceId))
-                                        {
-                                            taskInfo.SubInstanceId = taskInfo.SubInstanceId;
-                                        }
-                                        else
-                                        {
-                                            taskInfo.SubInstanceId = null;
                                         }
                                     }
 

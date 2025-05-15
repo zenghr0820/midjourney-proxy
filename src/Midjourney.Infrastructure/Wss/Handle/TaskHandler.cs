@@ -9,7 +9,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
         public const string TASK_PROPERTY_UPSCALE_INDEX = "upscale_index";
     }
 
-    public class TaskHandler(DiscordHelper discordHelper)
+    public class TaskHandler()
     {
         /// <summary>
         /// 查找任务并更新任务完成
@@ -120,7 +120,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
             TaskInfo task = null;
 
             // 1. 通过消息ID查找
-            task ??= instance.FindRunningTask(c =>
+            task = instance.FindRunningTask(c =>
                 (c.Status == TaskStatus.IN_PROGRESS || c.Status == TaskStatus.SUBMITTED) &&
                 c.MessageId == messageId).FirstOrDefault();
 

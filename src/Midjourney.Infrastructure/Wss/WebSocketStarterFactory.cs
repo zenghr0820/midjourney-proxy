@@ -68,6 +68,9 @@ namespace Midjourney.Infrastructure.Wss
             // 创建WebSocket启动器
             var socketStarter = new DiscordSockerStarter(_discordHelper, _webProxy, instance, _messageHandlers, _memoryCache, _config);
             
+            // 设置事件订阅
+            socketStarter.ChannelSubscribeEvent += instance.OnChannelSubscribe;
+            
             // 设置WebSocketStarter到Discord实例
             instance.WebSocketStarter = socketStarter;
             

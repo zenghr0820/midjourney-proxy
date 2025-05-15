@@ -470,12 +470,16 @@ namespace Midjourney.API
                     }
                 }
 
-                var enableInstanceIds = _discordLoadBalancer.GetAllInstances()
+                var enableInstanceList = _discordLoadBalancer.GetAllInstances()
                 .Where(instance => instance.IsAlive)
-                .Select(instance => instance.GuildId)
-                .ToHashSet();
+                .ToList();
 
-                _logger.Information("当前可用账号数 [{@0}] - {@1}", enableInstanceIds.Count, string.Join(", ", enableInstanceIds));
+                var initInfo = new StringBuilder();
+                initInfo.AppendLine($"当前可用账号数 [{enableInstanceList.Count}]");
+                foreach (var instance in enableInstanceList) {
+                    initInfo.AppendLine($"账号ID[ {instance.GuildId} ] => 频道ID - {string.Join(", ", instance.AllChannelIds)}");
+                }
+                _logger.Information(initInfo.ToString());
             });
             if (!isLock)
             {
@@ -506,7 +510,8 @@ namespace Midjourney.API
                 sw.Start();
 
                 var info = new StringBuilder();
-                info.AppendLine($"{account.Id}初始化中...");
+                info.AppendLine($"{account.Id} [{account.Remark}] - 初始化中...");
+                info.AppendLine("======================Start==========================");
 
                 var db = DbHelper.Instance.AccountStore;
                 DiscordInstance disInstance = null;
@@ -534,11 +539,11 @@ namespace Midjourney.API
                         return;
                     }
 
-                    disInstance = _discordLoadBalancer.GetDiscordInstance(account.ChannelId);
+                    disInstance = _discordLoadBalancer.GetDiscordInstance(account.GuildId);
 
                     // 判断是否在工作时间内
                     var now = new DateTimeOffset(DateTime.Now.Date).ToUnixTimeMilliseconds();
-                    var dayCount = (int)DbHelper.Instance.TaskStore.Count(c => c.InstanceId == account.ChannelId && c.SubmitTime >= now);
+                    var dayCount = (int)DbHelper.Instance.TaskStore.Count(c => c.InstanceId == account.GuildId && c.SubmitTime >= now);
 
                     sw.Stop();
                     info.AppendLine($"{account.Id}初始化中... 获取任务数耗时: {sw.ElapsedMilliseconds}ms");
@@ -645,7 +650,7 @@ namespace Midjourney.API
                                 }
 
                                 sw.Stop();
-                                info.AppendLine($"{account.Id}初始化中... 验证账号耗时: {sw.ElapsedMilliseconds}ms");
+                                info.AppendLine($"{account.GuildId}初始化中... 验证账号耗时: {sw.ElapsedMilliseconds}ms");
                                 sw.Restart();
                             }
 
@@ -654,7 +659,7 @@ namespace Midjourney.API
                             _discordLoadBalancer.AddInstance(disInstance);
 
                             sw.Stop();
-                            info.AppendLine($"{account.Id}初始化中... 创建实例耗时: {sw.ElapsedMilliseconds}ms");
+                            info.AppendLine($"{account.GuildId}初始化中... 创建实例耗时: {sw.ElapsedMilliseconds}ms");
                             sw.Restart();
 
                             // 这里应该等待初始化完成，并获取用户信息验证，获取用户成功后设置为可用状态
@@ -671,11 +676,11 @@ namespace Midjourney.API
                             {
                                 _logger.Error(ex, "同步 info 异常 {@0}", account.ChannelId);
 
-                                info.AppendLine($"{account.Id}初始化中... 同步 info 异常");
+                                info.AppendLine($"{account.GuildId}初始化中... 同步 info 异常");
                             }
 
                             sw.Stop();
-                            info.AppendLine($"{account.Id}初始化中... 同步 info 耗时: {sw.ElapsedMilliseconds}ms");
+                            info.AppendLine($"{account.GuildId}初始化中... 同步 info 耗时: {sw.ElapsedMilliseconds}ms");
                             sw.Restart();
 
                         }
@@ -685,7 +690,7 @@ namespace Midjourney.API
                         {
                             await disInstance?.RelaxToFastValidate();
                             sw.Stop();
-                            info.AppendLine($"{account.Id}初始化中... 慢速切换快速模式检查耗时: {sw.ElapsedMilliseconds}ms");
+                            info.AppendLine($"{account.GuildId}初始化中... 慢速切换快速模式检查耗时: {sw.ElapsedMilliseconds}ms");
                             sw.Restart();
                         }
 
@@ -695,14 +700,14 @@ namespace Midjourney.API
                             // 每 6~12 小时，同步账号信息
                             await disInstance?.RandomSyncInfo();
                             sw.Stop();
-                            info.AppendLine($"{account.Id}初始化中... 随机同步信息耗时: {sw.ElapsedMilliseconds}ms");
+                            info.AppendLine($"{account.GuildId}初始化中... 随机同步信息耗时: {sw.ElapsedMilliseconds}ms");
                             sw.Restart();
                         }
                     }
                     else
                     {
                         sw.Stop();
-                        info.AppendLine($"{account.Id}初始化中... 非工作时间，不创建实例耗时: {sw.ElapsedMilliseconds}ms");
+                        info.AppendLine($"{account.GuildId}初始化中... 非工作时间，不创建实例耗时: {sw.ElapsedMilliseconds}ms");
                         sw.Restart();
 
                         // 非工作时间内，如果存在实例则释放
@@ -713,14 +718,14 @@ namespace Midjourney.API
                         }
 
                         sw.Stop();
-                        info.AppendLine($"{account.Id}初始化中... 非工作时间，释放实例耗时: {sw.ElapsedMilliseconds}ms");
+                        info.AppendLine($"{account.GuildId}初始化中... 非工作时间，释放实例耗时: {sw.ElapsedMilliseconds}ms");
                         sw.Restart();
                     }
                 }
                 catch (Exception ex)
                 {
                     sw.Stop();
-                    info.AppendLine($"{account.Id}初始化中... 异常: {ex.Message} 耗时: {sw.ElapsedMilliseconds}ms");
+                    info.AppendLine($"{account.GuildId}初始化中... 异常: {ex.Message} 耗时: {sw.ElapsedMilliseconds}ms");
                     sw.Restart();
 
                     _logger.Error(ex, "Account({@0}) init fail, disabled: {@1}", account.ChannelId, ex.Message);
@@ -728,7 +733,7 @@ namespace Midjourney.API
                     if (setting.EnableAutoLogin)
                     {
                         sw.Stop();
-                        info.AppendLine($"{account.Id}尝试自动登录...");
+                        info.AppendLine($"{account.GuildId}尝试自动登录...");
                         sw.Restart();
 
                         try
@@ -739,13 +744,13 @@ namespace Midjourney.API
                             if (suc)
                             {
                                 sw.Stop();
-                                info.AppendLine($"{account.Id}自动登录请求成功...");
+                                info.AppendLine($"{account.GuildId}自动登录请求成功...");
                                 sw.Restart();
                             }
                             else
                             {
                                 sw.Stop();
-                                info.AppendLine($"{account.Id}自动登录请求失败...");
+                                info.AppendLine($"{account.GuildId}自动登录请求失败...");
                                 sw.Restart();
                             }
                         }
@@ -754,7 +759,7 @@ namespace Midjourney.API
                             _logger.Error(exa, "Account({@0}) auto login fail, disabled: {@1}", account.ChannelId, exa.Message);
 
                             sw.Stop();
-                            info.AppendLine($"{account.Id}自动登录请求异常...");
+                            info.AppendLine($"{account.GuildId}自动登录请求异常...");
                             sw.Restart();
                         }
                     }
@@ -771,13 +776,15 @@ namespace Midjourney.API
                     ClearAccountCache(account.Id);
 
                     sw.Stop();
-                    info.AppendLine($"{account.Id}初始化中... 异常，禁用账号耗时: {sw.ElapsedMilliseconds}ms");
+                    info.AppendLine($"{account.GuildId}初始化中... 异常，禁用账号耗时: {sw.ElapsedMilliseconds}ms");
                     sw.Restart();
                 }
                 finally
                 {
                     swAll.Stop();
-                    info.AppendLine($"{account.Id}初始化完成, 总耗时: {swAll.ElapsedMilliseconds}ms");
+                    info.AppendLine($"{account.GuildId}[ {account.Remark} ] - 初始化完成, 总耗时: {swAll.ElapsedMilliseconds}ms");
+                    info.AppendLine($"{account.GuildId} - 频道池初始化完成:[ {string.Join(",", disInstance?.AllChannelIds)} ]");
+                    info.AppendLine("======================End==========================");
 
                     _logger.Information(info.ToString());
                 }

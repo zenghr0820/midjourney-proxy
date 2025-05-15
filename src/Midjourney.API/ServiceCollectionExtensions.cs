@@ -5,6 +5,7 @@ using Midjourney.Infrastructure.LoadBalancer;
 using Midjourney.Infrastructure.Services;
 using Midjourney.Infrastructure.Storage;
 using Midjourney.Infrastructure.Wss;
+using Serilog;
 
 namespace Midjourney.API
 {
@@ -119,6 +120,10 @@ namespace Midjourney.API
             
             // 系统配置服务
             services.AddSingleton<ISystemSettingkService, SystemSettingService>();
+
+            // 日志
+            // 将 Serilog 的 ILogger 注册为单例
+            services.AddSingleton<Serilog.ILogger>(Log.Logger);
         }
     }
 }

@@ -10,8 +10,8 @@ namespace Midjourney.Infrastructure.Wss.Handle
     /// </summary>
     public class ShortenSuccessHandler : MessageHandler
     {
-        public ShortenSuccessHandler(DiscordLoadBalancer discordLoadBalancer, DiscordHelper discordHelper)
-            : base(discordLoadBalancer, discordHelper)
+        public ShortenSuccessHandler(ILogger logger)
+            : base(logger)
         {
         }
 

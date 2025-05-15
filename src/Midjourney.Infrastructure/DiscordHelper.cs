@@ -48,6 +48,16 @@ namespace Midjourney.Infrastructure
         public const string ME_CHANNELS_URL = "https://discord.com/api/v9/users/@me/channels";
 
         /// <summary>
+        /// api 版本
+        /// </summary>
+        public const int API_VERSION = 9;
+
+        /// <summary>
+        /// 网关编码方式
+        /// </summary>
+        public const string GatewayEncoding = "json";
+
+        /// <summary>
         /// 获取 Discord 服务器 URL。
         /// </summary>
         /// <returns>Discord 服务器 URL。</returns>
@@ -66,14 +76,14 @@ namespace Midjourney.Infrastructure
         /// 获取 Discord CDN URL。
         /// </summary>
         /// <returns>Discord CDN URL。</returns>
-        public string GetCdn()
+        public static string GetCdn()
         {
-            if (string.IsNullOrWhiteSpace(_properties.NgDiscord.Cdn))
+            if (string.IsNullOrWhiteSpace(GlobalConfiguration.Setting.NgDiscord.Cdn))
             {
                 return DISCORD_CDN_URL;
             }
 
-            string cdnUrl = _properties.NgDiscord.Cdn;
+            string cdnUrl = GlobalConfiguration.Setting.NgDiscord.Cdn;
             return cdnUrl.EndsWith("/") ? cdnUrl.Substring(0, cdnUrl.Length - 1) : cdnUrl;
         }
 

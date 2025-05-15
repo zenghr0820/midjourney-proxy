@@ -24,8 +24,6 @@ namespace Midjourney.Infrastructure
         private readonly ITaskStoreService _taskStoreService;
         private readonly INotifyService _notifyService;
 
-        private readonly IEnumerable<BotMessageHandler> _botMessageHandlers;
-        private readonly IEnumerable<UserMessageHandler> _userMessageHandlers;
         private readonly Dictionary<string, string> _paramsMap;
         private readonly IMemoryCache _memoryCache;
         private readonly ITaskService _taskService;
@@ -44,8 +42,6 @@ namespace Midjourney.Infrastructure
             _discordHelper = discordHelper;
             _taskStoreService = taskStoreService;
             _notifyService = notifyService;
-            _botMessageHandlers = messageHandlers;
-            _userMessageHandlers = userMessageHandlers;
             _memoryCache = memoryCache;
             _webSocketStarterFactory = webSocketStarterFactory;
             var paramsMap = new Dictionary<string, string>();
