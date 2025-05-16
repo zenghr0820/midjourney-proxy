@@ -41,7 +41,6 @@ namespace Midjourney.API
             services.AddTransient<UserMessageHandler, UserRerollSuccessHandler>();
 
             // wss消息处理程序
-            services.AddTransient<MessageHandler, ErrorMessageHandler>();
             services.AddTransient<MessageHandler, ImagineSuccessHandler>();
             services.AddTransient<MessageHandler, ActionSuccessHandler>();
             services.AddTransient<MessageHandler, UpscaleSuccessHandler>();

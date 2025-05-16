@@ -17,22 +17,26 @@ namespace Midjourney.Infrastructure.Wss.Handle
 
         public override int Order() => 90;
 
-        public override string MessageHandleType => "Start-And-Progress-Handler";
+        public override string MessageHandleType => "StartAndProgressHandler";
 
         /// <summary>
-        /// 处理通用消息
+        /// 处理开始和进度消息
         /// </summary>
         protected override void HandleMessage(DiscordInstance instance, MessageType messageType, MessageWrapper message)
         {
-            Log.Information("Start-And-Progress-Handler - Handling message:{0} {1}",MessageHandleType, messageType);
+            Log.Information("StartAndProgressHandler - Handling message:{0} {1}", MessageHandleType, messageType);
             try
             {
+                if (MessageParser.IsWaitingToStart(message.Content))
+                {
+                    return;
+                }
 
                 // 判断消息是否处理过了
                 CacheHelper<string, bool>.TryAdd(message.Id, false);
                 if (CacheHelper<string, bool>.Get(message.Id))
                 {
-                    Log.Debug("{0} 消息已经处理过了 {@1}", message.MessageHandler, message.Id);
+                    Log.Debug("消息已经处理过了 {@0}", message.Id);
                     return;
                 }
 
@@ -136,12 +140,12 @@ namespace Midjourney.Infrastructure.Wss.Handle
                 }
                 else
                 {
-                    Log.Debug("[{0}] - 未处理的消息类型: {1}", MessageHandleType, messageType);
+                    Log.Debug("未处理的消息类型: {0}", messageType);
                 }
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "[{0}] - 处理进度消息异常", MessageHandleType);
+                Log.Error(ex, "处理进度消息异常");
             }
         }
     }

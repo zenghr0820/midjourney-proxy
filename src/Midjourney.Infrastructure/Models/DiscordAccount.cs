@@ -2,6 +2,7 @@
 using LiteDB;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Dto;
+using Midjourney.Infrastructure.LoadBalancer;
 using MongoDB.Bson.Serialization.Attributes;
 using System.ComponentModel.DataAnnotations;
 using System.Text.RegularExpressions;
@@ -25,6 +26,13 @@ namespace Midjourney.Infrastructure.Models
         /// </summary>
         [Display(Name = "频道ID")]
         public string ChannelId { get; set; }
+
+        /// <summary>
+        /// 频道ID列表
+        /// </summary>
+        [JsonMap]
+         [Display(Name = "频道ID列表")]
+        public List<string> ChannelIds { get; set; } = new List<string>();
 
         /// <summary>
         /// 服务器ID
@@ -414,15 +422,14 @@ namespace Midjourney.Infrastructure.Models
         public Dictionary<string, string> SubChannelValues { get; set; } = new Dictionary<string, string>();
 
         /// <summary>
-        /// 频道ID列表
-        /// </summary>
-        [JsonMap]
-        public List<string> ChannelIds { get; set; } = new List<string>();
-
-        /// <summary>
         /// 是否自动获取服务器下的所有频道
         /// </summary>
         public bool EnableAutoFetchChannels { get; set; } = false;
+
+        /// <summary>
+        /// 频道选择策略
+        /// </summary>
+        public ChannelSelectionStrategyFactory.StrategyType? ChannelSelectionStrategy { get; set; }
 
         /// <summary>
         /// 执行中的任务数 - 用于前台显示
@@ -612,7 +619,7 @@ namespace Midjourney.Infrastructure.Models
         /// <returns>频道ID。</returns>
         public string GetDisplay()
         {
-            return ChannelId;
+            return GuildId + " - " + Remark;
         }
 
         /// <summary>
@@ -639,7 +646,9 @@ namespace Midjourney.Infrastructure.Models
                 UserAgent = string.IsNullOrEmpty(configAccount.UserAgent) ? Constants.DEFAULT_DISCORD_USER_AGENT : configAccount.UserAgent,
                 GuildId = configAccount.GuildId,
                 UserToken = configAccount.UserToken,
+                UseBotWss = configAccount.UseBotWss,
                 Enable = configAccount.Enable,
+                EnableAutoFetchChannels = configAccount.EnableAutoFetchChannels,
                 CoreSize = configAccount.CoreSize,
                 QueueSize = configAccount.QueueSize,
                 BotToken = configAccount.BotToken,
@@ -702,19 +711,19 @@ namespace Midjourney.Infrastructure.Models
                     {
                         continue;
                     }
-                    
+
                     // {id} 作为 key, {guid} 作为 value
                     var fir = item.Split(',').Where(c => c.Contains("https://discord.com/channels")).FirstOrDefault();
                     if (fir == null)
                     {
                         continue;
                     }
-                    
+
                     var arr = fir.Split('/').Where(c => !string.IsNullOrWhiteSpace(c)).ToArray();
                     if (arr.Length < 5)
                     {
                         continue;
-        }
+                    }
 
                     var guid = arr[3];
                     var id = arr[4];

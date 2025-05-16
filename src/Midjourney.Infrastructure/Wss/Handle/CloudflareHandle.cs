@@ -22,7 +22,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
         protected override void HandleMessage(DiscordInstance instance, MessageType messageType, MessageWrapper message)
         {
             DiscordAccount account = instance.Account;
-            Log.Information("开始处理Discord账号[{0}] 的 CF 真人验证 - messageId: {@1}", account.Id, message.Id);
+            Log.Information("开始处理 CF 真人验证 - messageId: {@1}", account.Id, message.Id);
             // 全局锁定中
             // 等待人工处理或者自动处理
             // 重试最多 3 次，最多处理 5 分钟

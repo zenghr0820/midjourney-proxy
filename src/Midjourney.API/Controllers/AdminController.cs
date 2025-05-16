@@ -376,7 +376,7 @@ namespace Midjourney.API.Controllers
                         DbHelper.Instance.AccountStore.Update(item);
 
                         // 清空缓存
-                        var inc = _loadBalancer.GetDiscordInstance(item.ChannelId);
+                        var inc = _loadBalancer.GetDiscordInstance(item.GuildId);
                         inc?.ClearAccountCache(item.Id);
 
                         if (!request.Success)
@@ -584,7 +584,7 @@ namespace Midjourney.API.Controllers
                         DbHelper.Instance.AccountStore.Update(item);
 
                         // 清空缓存
-                        var inc = _loadBalancer.GetDiscordInstance(item.ChannelId);
+                        var inc = _loadBalancer.GetDiscordInstance(item.GuildId);
                         inc?.ClearAccountCache(item.Id);
 
                         if (!request.Success)
@@ -675,7 +675,7 @@ namespace Midjourney.API.Controllers
                             DbHelper.Instance.AccountStore.Update(item);
 
                             // 清空缓存
-                            var inc = _loadBalancer.GetDiscordInstance(item.ChannelId);
+                            var inc = _loadBalancer.GetDiscordInstance(item.GuildId);
                             inc?.ClearAccountCache(item.Id);
                         }
                     }
@@ -724,7 +724,7 @@ namespace Midjourney.API.Controllers
             DbHelper.Instance.AccountStore.Update(item);
 
             // 清空缓存
-            var inc = _loadBalancer.GetDiscordInstance(item.ChannelId);
+            var inc = _loadBalancer.GetDiscordInstance(item.GuildId);
             inc?.ClearAccountCache(item.Id);
 
             return Result.Ok();
@@ -799,11 +799,16 @@ namespace Midjourney.API.Controllers
                 }
             }
 
-            var model = DbHelper.Instance.AccountStore.Single(c => c.ChannelId == accountConfig.ChannelId);
+            var model = DbHelper.Instance.AccountStore.Single(c => c.GuildId == accountConfig.GuildId);
 
             if (model != null)
             {
-                throw new LogicException("频道已存在");
+                throw new LogicException("该服务器已存在账号");
+            }
+            
+            if (accountConfig.UseBotWss && string.IsNullOrWhiteSpace(accountConfig.BotToken))
+            {
+                return Result.Fail("启动Bot Wss时，BotToken 必须有值");
             }
 
             var account = DiscordAccount.Create(accountConfig);
@@ -969,6 +974,12 @@ namespace Midjourney.API.Controllers
             if (param.GuildId != model.GuildId || param.ChannelId != model.ChannelId)
             {
                 return Result.Fail("禁止修改频道 ID 和服务器 ID");
+            }
+            
+            // 启动 Bot Token 时，botToken 必须有值
+            if (param.UseBotWss && string.IsNullOrWhiteSpace(param.BotToken))
+            {
+                return Result.Fail("启动Bot Wss时，BotToken 必须有值");
             }
 
             await _discordAccountInitializer.ReconnectAccount(param);
@@ -1839,7 +1850,7 @@ namespace Midjourney.API.Controllers
 
             try
             {
-                var result = instance.RefreshChannelPool();
+                var result = instance.ChannelPool.RefreshChannelPool();
                 if (result)
                 {
                     return Ok(Result.Ok("频道池刷新成功"));

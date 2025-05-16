@@ -189,18 +189,14 @@ namespace Midjourney.Infrastructure.Dto
         [JsonPropertyName("description")]
         public string Description { get; set; }
 
-        ///// <inheritdoc/>
-        //public string Url { get; set; }
+        [JsonPropertyName("url")]
+        public string Url { get; set; }
 
-        ///// <inheritdoc/>
-        //public string Title { get; set; }
+        [JsonPropertyName("title")]
+        public string Title { get; set; }
 
-        ///// <inheritdoc/>
-        //public DateTimeOffset? Timestamp { get; set; }
-
-        ///// <inheritdoc/>
-        //public dynamic Color { get; set; }
-
+        [JsonPropertyName("color")]
+        public dynamic Color { get; set; }
   
         [JsonPropertyName("image")]
         public EventDataEmbedImage Image { get; set; }

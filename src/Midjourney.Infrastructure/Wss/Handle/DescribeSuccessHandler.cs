@@ -16,18 +16,23 @@ namespace Midjourney.Infrastructure.Wss.Handle
 
         public override int Order() => 88888;
 
-        public override string MessageHandleType => "Describe-Success-Handler";
+        public override string MessageHandleType => "DescribeSuccessHandler";
 
         /// <summary>
-        /// 处理通用消息
+        /// 处理图生文成功消息
         /// </summary>
         protected override void HandleMessage(DiscordInstance instance, MessageType messageType, MessageWrapper message)
         {
+            if (MessageParser.IsWaitingToStart(message.Content))
+            {
+                return;
+            }
+
             // 判断消息是否处理过了
             CacheHelper<string, bool>.TryAdd(message.Id, false);
             if (CacheHelper<string, bool>.Get(message.Id))
             {
-                Log.Debug("[{@0}] - 消息已经处理过了 {@1}", MessageHandleType, message.Id);
+                Log.Debug("消息已经处理过了 {@0}", message.Id);
                 return;
             }
 
@@ -41,9 +46,6 @@ namespace Midjourney.Infrastructure.Wss.Handle
 
                     // 查询并更新图生文任务
                     taskHandler.FindAndFinishDescribeTask(instance, message, null);
-
-                    // 标记为已处理
-                    CacheHelper<string, bool>.AddOrUpdate(message.Id, true);
                 }
             }
         }

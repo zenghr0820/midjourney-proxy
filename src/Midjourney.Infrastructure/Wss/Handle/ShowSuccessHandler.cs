@@ -15,10 +15,10 @@ namespace Midjourney.Infrastructure.Wss.Handle
 
         public override int Order() => 77777;
 
-        public override string MessageHandleType => "Show-Success-Handler";
+        public override string MessageHandleType => "ShowSuccessHandler";
 
         /// <summary>
-        /// 处理通用消息
+        /// 处理显示图像成功消息
         /// </summary>
         protected override void HandleMessage(DiscordInstance instance, MessageType messageType, MessageWrapper message)
         {
@@ -26,7 +26,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
             CacheHelper<string, bool>.TryAdd(message.Id, false);
             if (CacheHelper<string, bool>.Get(message.Id))
             {
-                Log.Debug("{0} 消息已经处理过了 {@1}", message.MessageHandler, message.Id);
+                Log.Debug("消息已经处理过了 {@0}", message.Id);
                 return;
             }
 

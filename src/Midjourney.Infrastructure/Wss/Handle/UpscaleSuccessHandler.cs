@@ -13,19 +13,24 @@ namespace Midjourney.Infrastructure.Wss.Handle
         {
         }
 
-        public override string MessageHandleType => "Upscale-Success-Handler";
+        public override string MessageHandleType => "UpscaleSuccessHandler";
 
         /// <summary>
-        /// 处理通用消息
+        /// 处理放大图像成功消息
         /// </summary>
         protected override void HandleMessage(DiscordInstance instance, MessageType messageType, MessageWrapper message)
         {
+
+            if (MessageParser.IsWaitingToStart(message.Content))
+            {
+                return;
+            }
 
             // 判断消息是否处理过了
             CacheHelper<string, bool>.TryAdd(message.Id, false);
             if (CacheHelper<string, bool>.Get(message.Id))
             {
-                Log.Debug("{0} 消息已经处理过了 {@1}", message.MessageHandler, message.Id);
+                Log.Debug("消息已经处理过了 {@0}", message.Id);
                 return;
             }
 
@@ -39,26 +44,7 @@ namespace Midjourney.Infrastructure.Wss.Handle
                         parseData.Index > 0 ? TaskAction.MIX_UPSCALE : TaskAction.UPSCALE,
                         parseData.Prompt,
                         message);
-
-                // if (parseData.Index > 0)
-                // {
-                //     taskHandler.FindAndFinishUTask(
-                //         instance,
-                //         message,
-                //         parseData.Prompt,
-                //         parseData.Index);
-                // }
-                // else
-                // {
-                //    taskHandler.FindAndFinishTask(
-                //         instance,
-                //         message,
-                //         parseData.Prompt,
-                //         TaskAction.UPSCALE);
-                // }
-                
-                // 标记为已处理
-                // CacheHelper<string, bool>.AddOrUpdate(message.Id, true);
+            
             }
         }
     }

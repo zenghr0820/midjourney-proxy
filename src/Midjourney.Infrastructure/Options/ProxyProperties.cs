@@ -390,6 +390,11 @@ namespace Midjourney.Infrastructure
         public string BotToken { get; set; }
 
         /// <summary>
+        /// 是否启动 Bot Wss 连接
+        /// </summary>
+        public bool UseBotWss;
+
+        /// <summary>
         /// 用户UserAgent.
         /// </summary>
         public string UserAgent { get; set; } = Constants.DEFAULT_DISCORD_USER_AGENT;
@@ -403,6 +408,11 @@ namespace Midjourney.Infrastructure
         /// 是否可用.
         /// </summary>
         public bool Enable { get; set; }
+        
+        /// <summary>
+        /// 是否开启多频道.
+        /// </summary>
+        public bool EnableAutoFetchChannels { get; set; }
 
         /// <summary>
         /// 开启 Midjourney 绘图

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.LoadBalancer;
 using Serilog;
@@ -12,11 +13,11 @@ namespace Midjourney.Infrastructure.Wss.Handle
     public abstract class MessageHandler
     {
         protected readonly TaskHandler taskHandler;
-        
+
         protected MessageHandler()
         {
             taskHandler = new TaskHandler();
-           
+
         }
 
         /// <summary>
@@ -29,21 +30,15 @@ namespace Midjourney.Infrastructure.Wss.Handle
         /// </summary>
         public virtual int Order() => 100;
 
-        public void Handle(DiscordInstance instance, MessageType messageType, EventData message)
+        public void Handle(DiscordInstance instance, MessageType messageType, MessageWrapper message)
         {
             using (LogContext.PushProperty("LogPrefix", MessageHandleType))
             {
-                if (MessageParser.IsWaitingToStart(message.Content))
-                {
-                    Log.Debug("跳过 Waiting to start 消息 {@0}", message.Id);
-                    return;
-                }
+                Log.Debug("Start handle message guildId: {0} channelId: {1} messageId: {2} messageType: {3}", instance.Account.GuildId, message.ChannelId, message.Id, messageType);
 
-                Log.Information("开始处理Discord账号[{0}] 的 {1} 消息 - messageId: {@2}", instance.Account.Id, messageType, message.Id);
+                // var wrapper = new MessageWrapper(message);
 
-                var wrapper = new MessageWrapper(message);
-
-                HandleMessage(instance, messageType, wrapper);
+                HandleMessage(instance, messageType, message);
             }
         }
 

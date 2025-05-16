@@ -140,8 +140,7 @@ namespace Midjourney.Infrastructure.Wss
             _memoryCache = memoryCache;
             _config = config ?? new WebSocketConfig();
 
-            _logger = Log.Logger;
-            _logContext = Account.GuildId;
+            _logger = Log.Logger.ForContext("LogPrefix", $"{Account.GuildId} - socket");
 
             _properties = GlobalConfiguration.Setting;
 
@@ -200,7 +199,7 @@ namespace Midjourney.Infrastructure.Wss
                 // 或者账号已禁用
                 if (_isDispose || Account?.Enable != true)
                 {
-                    _logger.Warning("用户已禁用或资源已释放 {@0},{@1}", Account?.ChannelId, _isDispose);
+                    _logger.Warning("已禁用或资源已释放 {@0},{@1}", Account?.ChannelId, _isDispose);
                     return false;
                 }
 
@@ -250,7 +249,7 @@ namespace Midjourney.Infrastructure.Wss
 
                     _receiveTask = ReceiveMessagesAsync(_receiveTokenSource.Token);
 
-                    _logger.Information("用户 WebSocket 连接已建立 {@0}", Account.ChannelId);
+                    _logger.Information("WebSocket 连接已建立 {@0}", Account.ChannelId);
                 });
 
                 if (!isLock)
@@ -264,9 +263,9 @@ namespace Midjourney.Infrastructure.Wss
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "用户 WebSocket 连接异常 {@0}", Account.ChannelId);
+                _logger.Error(ex, "WebSocket 连接异常 {@0}", Account.ChannelId);
                 ConnectionState = ConnectionState.Error;
-                HandleFailure(CLOSE_CODE_EXCEPTION, "用户 WebSocket 连接异常");
+                HandleFailure(CLOSE_CODE_EXCEPTION, "WebSocket 连接异常");
             }
 
             return false;
@@ -312,7 +311,7 @@ namespace Midjourney.Infrastructure.Wss
             var identifyMessage = new { op = 2, d = authData };
             await SendMessageAsync(identifyMessage);
 
-            _logger.Information("用户已发送 IDENTIFY 消息 {@0}", identifyMessage.ToString());
+            _logger.Information("已发送 IDENTIFY 消息 {@0}", identifyMessage.ToString());
         }
 
         /// <summary>
@@ -334,7 +333,7 @@ namespace Midjourney.Infrastructure.Wss
 
             await SendMessageAsync(resumeMessage);
 
-            _logger.Information("用户已发送 RESUME 消息 {@0}", Account.ChannelId);
+            _logger.Information("已发送 RESUME 消息 {@0}", Account.ChannelId);
         }
 
         /// <summary>
@@ -346,7 +345,7 @@ namespace Midjourney.Infrastructure.Wss
         {
             if (WebSocket.State != WebSocketState.Open)
             {
-                _logger.Warning("用户 WebSocket 已关闭，无法发送消息 {@0}", Account.ChannelId);
+                _logger.Warning("WebSocket 已关闭，无法发送消息 {@0}", Account.ChannelId);
                 return;
             }
 
@@ -362,76 +361,155 @@ namespace Midjourney.Infrastructure.Wss
         /// <returns>接收任务</returns>
         private async Task ReceiveMessagesAsync(CancellationToken cancellationToken)
         {
+            const int MaxMessageSize = 1024 * 1024 * 10; // 10MB
             try
             {
-                if (WebSocket == null)
+                if (WebSocket == null || WebSocket.State != WebSocketState.Open)
                 {
+                    _logger.Warning("WebSocket 未初始化或已关闭");
                     return;
                 }
 
-                while (WebSocket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+                var buffer = new byte[1024 * 4];
+
+                while (!cancellationToken.IsCancellationRequested &&
+               WebSocket?.State == WebSocketState.Open)
                 {
                     WebSocketReceiveResult result;
-                    var buffer = new byte[1024 * 4];
 
                     using (var ms = new MemoryStream())
                     {
                         try
                         {
+                            // 设置接收超时保护
+                            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(60)); // 60秒超时
+                            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+                            
+                            // 接收单条消息的所有分片
                             do
                             {
-                                // 使用Task.WhenAny等待ReceiveAsync或取消任务
-                                var receiveTask = WebSocket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
-                                var completedTask = await Task.WhenAny(receiveTask, Task.Delay(-1, cancellationToken));
-
-                                if (completedTask == receiveTask)
+                                try
                                 {
-                                    result = receiveTask.Result;
+                                    result = await WebSocket.ReceiveAsync(new ArraySegment<byte>(buffer), linkedCts.Token);
+                                    if (ms.Length + result.Count > MaxMessageSize)
+                                    {
+                                        throw new InvalidDataException($"消息大小超过限制: {MaxMessageSize} bytes");
+                                    }
                                     ms.Write(buffer, 0, result.Count);
                                 }
-                                else
+                                catch (OperationCanceledException) when (timeoutCts.Token.IsCancellationRequested)
                                 {
-                                    // 任务已取消
-                                    _logger.Information("接收消息任务已取消 {@0}", Account.ChannelId);
+                                    _logger.Warning("接收消息超时，重新连接 {@0}", Account.ChannelId);
+                                    HandleFailure(CLOSE_CODE_RECONNECT, "接收消息超时");
                                     return;
                                 }
-
-                            } while (!result.EndOfMessage && !cancellationToken.IsCancellationRequested);
-
+                            } while (!result.EndOfMessage);
+                            
+                            // 处理完整消息
                             ms.Seek(0, SeekOrigin.Begin);
-                            if (result.MessageType == WebSocketMessageType.Binary)
+                            switch (result.MessageType)
                             {
-                                buffer = ms.ToArray();
-                                await HandleBinaryMessageAsync(buffer);
-                            }
-                            else if (result.MessageType == WebSocketMessageType.Text)
-                            {
-                                var message = Encoding.UTF8.GetString(ms.ToArray());
-                                HandleMessage(message);
-                            }
-                            else if (result.MessageType == WebSocketMessageType.Close)
-                            {
-                                _logger.Warning("用户 WebSocket 连接已关闭 {@0}", Account.ChannelId);
+                                case WebSocketMessageType.Binary:
+                                    buffer = ms.ToArray();
+                                    await HandleBinaryMessageAsync(buffer);
+                                    break;
+                                case WebSocketMessageType.Text:
+                                    var message = Encoding.UTF8.GetString(ms.ToArray());
+                                    HandleMessage(message);
+                                    break;
+                                case WebSocketMessageType.Close:
+                                    _logger.Warning(
+                                        "WebSocket 连接关闭。状态: {Status}, 描述: {Description}",
+                                        result.CloseStatus, result.CloseStatusDescription);
 
-                                await WebSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, string.Empty, cancellationToken);
-                                HandleFailure((int)result.CloseStatus, result.CloseStatusDescription);
+                                    await WebSocket.CloseAsync(
+                                        WebSocketCloseStatus.NormalClosure,
+                                        string.Empty,
+                                        cancellationToken);
+                                    HandleFailure((int)result.CloseStatus, result.CloseStatusDescription);
+                                    return;
+                                default:
+                                    _logger.Warning("收到未知消息类型: {MessageType}", result.MessageType);
+                                    break;
+                            }
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            _logger.Information("接收消息任务已取消 {@0}", Account.ChannelId);
+                            return;
+                        }
+                        catch (InvalidDataException ex)
+                        {
+                            _logger.Error(ex, "消息大小超过限制");
+                            await WebSocket.CloseAsync(
+                                WebSocketCloseStatus.MessageTooBig,
+                                "Message too large",
+                                cancellationToken);
+                            return;
+                        }
+                        catch (WebSocketException ex)
+                        {
+                            _logger.Error(ex, "WebSocket连接异常: {Message}", ex.Message);
+                            // 检查是否是"连接关闭而未完成握手"的特定错误
+                            if (ex.Message.Contains("without completing the close handshake"))
+                            {
+                                // 对于这类错误，直接中止连接并触发重连
+                                if (WebSocket?.State != WebSocketState.Closed && WebSocket?.State != WebSocketState.Aborted)
+                                {
+                                    try
+                                    {
+                                        WebSocket?.Abort();
+                                    }
+                                    catch { }
+                                }
+                                _logger.Error(ex, "远程服务器未完成关闭握手: {Message}", ex.Message);
+                                // HandleFailure(CLOSE_CODE_RECONNECT, "远程服务器未完成关闭握手");
                             }
                             else
                             {
-                                _logger.Warning("用户收到未知消息 {@0}", Account.ChannelId);
+                                // 对于其他错误，尝试正常关闭
+                                if (WebSocket?.State == WebSocketState.Open)
+                                {
+                                    try
+                                    {
+                                        await WebSocket.CloseAsync(
+                                            WebSocketCloseStatus.InternalServerError,
+                                            "WebSocket error",
+                                            cancellationToken);
+                                    }
+                                    catch
+                                    {
+                                        WebSocket?.Abort();
+                                    }
+                                }
+                                _logger.Error(ex, "WebSocket异常: {Message}", ex.Message);
+                                // HandleFailure(CLOSE_CODE_EXCEPTION, $"WebSocket异常: {ex.Message}");
                             }
+                            return;
                         }
                         catch (Exception ex)
                         {
-                            _logger.Error(ex, "用户接收 ws 消息时发生异常 {@0}", Account.ChannelId);
+                            _logger.Error(ex, "接收消息时发生异常");
+                            if (WebSocket?.State == WebSocketState.Open)
+                            {
+                                try
+                                {
+                                    await WebSocket.CloseAsync(
+                                        WebSocketCloseStatus.InternalServerError,
+                                        "Internal error",
+                                        cancellationToken);
+                                }
+                                catch
+                                {
+                                    // 如果关闭失败，强制中止
+                                    WebSocket?.Abort();
+                                }
+                            }
+                            // HandleFailure(CLOSE_CODE_EXCEPTION, $"接收消息异常: {ex.Message}");
+                            return;
                         }
                     }
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                // 任务被取消
-                _logger.Information("接收消息任务被取消 {@0}", Account.ChannelId);
             }
             catch (Exception ex)
             {
@@ -559,7 +637,7 @@ namespace Midjourney.Infrastructure.Wss
                 token = GetPrefixedToken()
             };
 
-            _logger.Information("用户创建授权信息 {@0}", authData.token);
+            _logger.Information("创建授权信息 {@0}", authData.token);
 
             return JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(authData));
         }
@@ -591,7 +669,7 @@ namespace Midjourney.Infrastructure.Wss
                 {
                     case GatewayOpCode.Hello:
                         {
-                            _logger.Information("用户 Received Hello {@0}", Account.ChannelId);
+                            _logger.Information("Received Hello {@0}", Account.ChannelId);
                             var heartbeatInterval = payload.GetProperty("d").GetProperty("heartbeat_interval").GetInt64();
 
                             // 初始化心跳服务
@@ -601,18 +679,18 @@ namespace Midjourney.Infrastructure.Wss
 
                     case GatewayOpCode.Heartbeat:
                         {
-                            _logger.Information("用户 Received Heartbeat {@0}", Account.ChannelId);
+                            _logger.Information("Received Heartbeat {@0}", Account.ChannelId);
 
                             // 立即发送心跳
                             await SendHeartbeatAsync();
 
-                            _logger.Information("用户 Received Heartbeat 消息已发送 {@0}", Account.ChannelId);
+                            _logger.Information("Received Heartbeat 消息已发送 {@0}", Account.ChannelId);
                         }
                         break;
 
                     case GatewayOpCode.HeartbeatAck:
                         {
-                            _logger.Information("用户 Received HeartbeatAck {@0}", Account.ChannelId);
+                            _logger.Information("Received HeartbeatAck {@0}", Account.ChannelId);
 
                             // 心跳确认处理
                             if (_heartbeatService != null)
@@ -624,8 +702,8 @@ namespace Midjourney.Infrastructure.Wss
 
                     case GatewayOpCode.InvalidSession:
                         {
-                            _logger.Warning("用户 Received InvalidSession {@0}", Account.ChannelId);
-                            _logger.Warning("用户 Failed to resume previous session {@0}", Account.ChannelId);
+                            _logger.Warning("Received InvalidSession {@0}", Account.ChannelId);
+                            _logger.Warning("Failed to resume previous session {@0}", Account.ChannelId);
 
                             _sessionId = null;
                             _sequence = null;
@@ -637,7 +715,7 @@ namespace Midjourney.Infrastructure.Wss
 
                     case GatewayOpCode.Reconnect:
                         {
-                            _logger.Warning("用户 Received Reconnect {@0}", Account.ChannelId);
+                            _logger.Warning("Received Reconnect {@0}", Account.ChannelId);
 
                             HandleFailure(CLOSE_CODE_RECONNECT, "收到重连请求，将自动重连");
                         }
@@ -645,7 +723,7 @@ namespace Midjourney.Infrastructure.Wss
 
                     case GatewayOpCode.Resume:
                         {
-                            _logger.Information("用户 Resume {@0}", Account.ChannelId);
+                            _logger.Information("Resume {@0}", Account.ChannelId);
 
                             OnSocketSuccess();
                         }
@@ -653,19 +731,19 @@ namespace Midjourney.Infrastructure.Wss
 
                     case GatewayOpCode.Dispatch:
                         {
-                            _logger.Information("用户 Received Dispatch {@0}, {@1}", type, Account.GuildId);
+                            _logger.Information("Received Dispatch {@0}, {@1}", type, Account.GuildId);
                             await HandleDispatch(payload);
                         }
                         break;
 
                     default:
-                        _logger.Warning("用户 Unknown OpCode ({@0}) {@1}", opCode, Account.ChannelId);
+                        _logger.Warning("Unknown OpCode ({@0}) {@1}", opCode, Account.ChannelId);
                         break;
                 }
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, $"用户 Error handling {opCode}{(type != null ? $" ({type})" : "")}, {Account.ChannelId}");
+                _logger.Error(ex, $"Error handling {opCode}{(type != null ? $" ({type})" : "")}, {Account.ChannelId}");
             }
         }
 
@@ -680,7 +758,6 @@ namespace Midjourney.Infrastructure.Wss
 
             // 创建新的心跳服务
             _heartbeatService = new HeartbeatService(
-                _logger,
                 SendHeartbeatAsync,
                 (int)heartbeatInterval,
                 _config.HeartbeatFactor,
@@ -712,7 +789,7 @@ namespace Midjourney.Infrastructure.Wss
             var heartbeatMessage = new { op = 1, d = _sequence };
 
             await SendMessageAsync(heartbeatMessage);
-            _logger.Information("用户已发送 HEARTBEAT 消息 {@0}", Account.ChannelId);
+            _logger.Information("已发送 HEARTBEAT 消息 {@0}", Account.ChannelId);
 
             // 标记心跳已发送
             if (_heartbeatService != null)
@@ -727,63 +804,72 @@ namespace Midjourney.Infrastructure.Wss
         /// <param name="data">消息数据</param>
         private async Task HandleDispatch(JsonElement data)
         {
-            _logger.Debug("HandleDispatch => {@0}", data.ToString());
             #region Connection
             if (data.TryGetProperty("t", out var t) && t.GetString() == "READY")
             {
                 _sessionId = data.GetProperty("d").GetProperty("session_id").GetString();
                 _resumeGatewayUrl = data.GetProperty("d").GetProperty("resume_gateway_url").GetString();
-                
+
                 OnSocketSuccess();
 
-                if (!data.TryGetProperty("d", out JsonElement payload))
+                if (Account.EnableAutoFetchChannels)
                 {
-                    return;
+                    // 开始获取频道列表
+                    await InitChannelHandler(data);
                 }
-                
-                // 获取服务器ID
-                if (payload.TryGetProperty("guilds", out JsonElement guildsElement))
-                {
-                    _logger.Debug("- Try Get Guilds -");
-                    var guilds = guildsElement.Deserialize<DiscordExtendedGuild[]>();
-                    foreach (var guild in guilds)
-                    {
-                        if (guild == null) continue;
-                        _logger.Debug("Get Guild[{@0}] - ChannelIds => {@1}", guild?.Id, guild?.Channels.Length);
-                        _guilds.AddOrUpdate(guild.Id, guild, (id, old) => guild);
-                    }
-                }
-                _logger.Information("当前账号下的服务器数 [{@0}] - {@1}", _guilds.Count, string.Join(", ", _guilds.Keys));
-                // 获取私信频道列表
-                if (payload.TryGetProperty("private_channels", out JsonElement dmChannelElement))
-                {
-                    _logger.Debug("- Try Get DM Channels -");
-                    var dmChannels = dmChannelElement.Deserialize<DiscordChannelDto[]>();
-                    foreach (var channel in dmChannels)
-                    {
-                        if (channel == null) continue;
-                        _logger.Debug("Get DM Channel ID[{@0}] - Name => {@1}", channel?.Id, channel?.Name);
-                        _dmChannels.AddOrUpdate(channel.Id, channel, (id, old) => channel);
-                    }
-                }
-                _logger.Information("当前账号下的私信频道数 [{@0}] - {@1}", _dmChannels.Count, string.Join(", ", _dmChannels.Keys));
-                
-                // // 事件订阅
-                // await _readyEvent.InvokeAsync(readyEvent);
-                // // 频道订阅
-                // await _guildSubscribeEvent.InvokeAsync(_guilds);
-                await _channelSubscribeEvent.InvokeAsync(_guilds);
             }
             else if (data.TryGetProperty("t", out var resumed) && resumed.GetString() == "RESUMED")
             {
                 OnSocketSuccess();
-                await _resumedEvent.InvokeAsync();
+                // await _resumedEvent.InvokeAsync();
             }
             #endregion
             else
             {
                 EnqueueMessage(data);
             }
+        }
+
+        public async Task InitChannelHandler(JsonElement data)
+        {
+            if (!data.TryGetProperty("d", out JsonElement payload))
+            {
+                return;
+            }
+
+            // 获取服务器ID
+            if (payload.TryGetProperty("guilds", out JsonElement guildsElement))
+            {
+                _logger.Debug("- Try Get Guilds -");
+                var guilds = guildsElement.Deserialize<DiscordExtendedGuild[]>();
+                foreach (var guild in guilds)
+                {
+                    if (guild == null) continue;
+                    _logger.Debug("Get Guild[{@0}] - ChannelIds => {@1}", guild?.Id, guild.Channels?.Length);
+                    _guilds.AddOrUpdate(guild.Id, guild, (id, old) => guild);
+                }
+            }
+            _logger.Information("当前账号下的服务器数 [{@0}] - {@1}", _guilds.Count, string.Join(", ", _guilds.Keys));
+            // 获取私信频道列表
+            if (payload.TryGetProperty("private_channels", out JsonElement dmChannelElement))
+            {
+                _logger.Debug("- Try Get DM Channels -");
+                var dmChannels = dmChannelElement.Deserialize<DiscordChannelDto[]>();
+                foreach (var channel in dmChannels)
+                {
+                    if (channel == null) continue;
+                    _logger.Debug("recipient_ids = {@0}", string.Join(", ", channel?.RecipientsIds ?? Array.Empty<string>()));
+                    _logger.Debug("Get DM Channel ID[{@0}] - Name => {@1}", channel?.Id, channel?.Name);
+                    _dmChannels.AddOrUpdate(channel.Id, channel, (id, old) => channel);
+                }
+            }
+            _logger.Information("当前账号下的私信频道数 [{@0}] - {@1}", _dmChannels.Count, string.Join(", ", _dmChannels.Keys));
+
+            // // 事件订阅
+            // await _readyEvent.InvokeAsync(readyEvent);
+            // // 频道订阅
+            await _dmChannelEvent.InvokeAsync(_dmChannels);
+            await _channelSubscribeEvent.InvokeAsync(_guilds);
         }
 
         /// <summary>
@@ -793,7 +879,7 @@ namespace Midjourney.Infrastructure.Wss
         /// <param name="reason">错误原因</param>
         private void HandleFailure(int code, string reason)
         {
-            _logger.Error("用户 WebSocket 连接失败, 代码 {0}: {1}, {2}", code, reason, Account.ChannelId);
+            _logger.Error("WebSocket 连接失败, 代码 {0}: {1}, {2}", code, reason, Account.ChannelId);
 
             if (!IsRunning)
             {
@@ -805,17 +891,17 @@ namespace Midjourney.Infrastructure.Wss
 
             if (code >= 4000)
             {
-                _logger.Warning("用户无法重新连接， 由 {0}({1}) 关闭 {2}, 尝试新连接... ", code, reason, Account.ChannelId);
+                _logger.Warning("无法重新连接， 由 {0}({1}) 关闭 {2}, 尝试新连接... ", code, reason, Account.ChannelId);
                 TryNewConnect();
             }
             else if (code == CLOSE_CODE_RECONNECT)
             {
-                _logger.Warning("用户由 {0}({1}) 关闭, 尝试重新连接... {2}", code, reason, Account.ChannelId);
+                _logger.Warning("由 {0}({1}) 关闭, 尝试重新连接... {2}", code, reason, Account.ChannelId);
                 TryReconnect();
             }
             else
             {
-                _logger.Warning("用户由 {0}({1}) 关闭, 尝试新连接... {2}", code, reason, Account.ChannelId);
+                _logger.Warning("由 {0}({1}) 关闭, 尝试新连接... {2}", code, reason, Account.ChannelId);
                 TryNewConnect();
             }
         }
@@ -837,7 +923,7 @@ namespace Midjourney.Infrastructure.Wss
                 var success = StartAsync(true).ConfigureAwait(false).GetAwaiter().GetResult();
                 if (!success)
                 {
-                    _logger.Warning("用户重新连接失败 {@0}，尝试新连接", Account.ChannelId);
+                    _logger.Warning("重新连接失败 {@0}，尝试新连接", Account.ChannelId);
 
                     Thread.Sleep(_config.ReconnectDelay);
                     TryNewConnect();
@@ -845,7 +931,7 @@ namespace Midjourney.Infrastructure.Wss
             }
             catch (Exception e)
             {
-                _logger.Warning(e, "用户重新连接异常 {@0}，尝试新连接", Account.ChannelId);
+                _logger.Warning(e, "重新连接异常 {@0}，尝试新连接", Account.ChannelId);
 
                 Thread.Sleep(_config.ReconnectDelay);
                 TryNewConnect();
@@ -873,7 +959,7 @@ namespace Midjourney.Infrastructure.Wss
                         _memoryCache.TryGetValue(ncKey, out int count);
                         if (count > _config.ConnectRetryLimit)
                         {
-                            _logger.Warning("用户新的连接失败次数超过限制，禁用账号");
+                            _logger.Warning("新的连接失败次数超过限制，禁用账号");
                             DisableAccount("新的连接失败次数超过限制，禁用账号");
                             return;
                         }
@@ -887,7 +973,7 @@ namespace Midjourney.Infrastructure.Wss
                     }
                     catch (Exception e)
                     {
-                        _logger.Warning(e, "用户新连接失败, 第 {@0} 次, {@1}", i, Account.ChannelId);
+                        _logger.Warning(e, "新连接失败, 第 {@0} 次, {@1}", i, Account.ChannelId);
 
                         Thread.Sleep(_config.ReconnectDelay);
                     }
@@ -903,7 +989,7 @@ namespace Midjourney.Infrastructure.Wss
 
             if (!isLock)
             {
-                _logger.Warning("用户新的连接作业正在执行中，禁止重复执行");
+                _logger.Warning("新的连接作业正在执行中，禁止重复执行");
             }
         }
 
@@ -953,7 +1039,7 @@ namespace Midjourney.Infrastructure.Wss
                     }
                     catch (Exception exa)
                     {
-                        _logger.Error(exa, "用户 Account({@0}) auto login fail, disabled: {@1}", account.ChannelId, exa.Message);
+                        _logger.Error(exa, "Account({@0}) auto login fail, disabled: {@1}", account.ChannelId, exa.Message);
                         sw.Stop();
                         info.AppendLine($"{account.Id}自动登录请求异常...");
                         sw.Restart();
@@ -998,8 +1084,9 @@ namespace Midjourney.Infrastructure.Wss
                     // 停止心跳服务
                     _heartbeatService?.Stop();
                 }
-                catch
+                catch (Exception ex)
                 {
+                    _logger.Warning(ex, "停止心跳服务异常");
                 }
 
                 try
@@ -1009,10 +1096,12 @@ namespace Midjourney.Infrastructure.Wss
                         LogInfo("强制取消消息 token");
                         _receiveTokenSource?.Cancel();
                         _receiveTokenSource?.Dispose();
+                        _receiveTokenSource = null;
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    _logger.Warning(ex, "取消接收任务token异常");
                 }
 
                 try
@@ -1020,73 +1109,85 @@ namespace Midjourney.Infrastructure.Wss
                     if (_receiveTask != null)
                     {
                         LogInfo("强制释放消息 task");
-                        _receiveTask?.Wait(1000);
+                        
+                        // 等待接收任务完成，最多等待2秒
+                        if (!_receiveTask.IsCompleted && !_receiveTask.IsCanceled && !_receiveTask.IsFaulted)
+                        {
+                            if (!_receiveTask.Wait(TimeSpan.FromSeconds(2)))
+                            {
+                                _logger.Warning("接收任务等待超时");
+                            }
+                        }
+                        
                         _receiveTask?.Dispose();
+                        _receiveTask = null;
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    _logger.Warning(ex, "释放接收任务异常");
                 }
 
                 try
                 {
-                    // 强制关闭
-                    if (WebSocket != null && WebSocket.State != WebSocketState.Closed)
+                    // 处理WebSocket关闭
+                    if (WebSocket != null)
                     {
-                        LogInfo("强制关闭 wss close");
+                        var currentState = WebSocket.State;
+                        LogInfo($"准备关闭WebSocket，当前状态: {currentState}");
 
-                        if (reconnect)
+                        if (currentState == WebSocketState.Open || currentState == WebSocketState.CloseReceived || currentState == WebSocketState.CloseSent)
                         {
-                            // 重连使用 4000 断开
-                            var status = (WebSocketCloseStatus)4000;
-                            var closeTask = Task.Run(() => WebSocket.CloseOutputAsync(status, "", new CancellationToken()));
-                            if (!closeTask.Wait(5000))
+                            // 正常关闭
+                            try
                             {
-                                _logger.Warning("WebSocket 关闭操作超时 {@0}", Account.ChannelId);
-
-                                // 如果关闭操作超时，则强制中止连接
-                                WebSocket?.Abort();
+                                if (reconnect)
+                                {
+                                    // 重连时使用 4000 断开
+                                    var status = (WebSocketCloseStatus)4000;
+                                    var closeTask = Task.Run(() => WebSocket.CloseOutputAsync(status, "准备重连", CancellationToken.None));
+                                    if (!closeTask.Wait(TimeSpan.FromSeconds(3)))
+                                    {
+                                        _logger.Warning("WebSocket 关闭操作超时，强制中止 {@0}", Account.ChannelId);
+                                        WebSocket.Abort();
+                                    }
+                                }
+                                else
+                                {
+                                    var closeTask = Task.Run(() => WebSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "正常关闭", CancellationToken.None));
+                                    if (!closeTask.Wait(TimeSpan.FromSeconds(3)))
+                                    {
+                                        _logger.Warning("WebSocket 关闭操作超时，强制中止 {@0}", Account.ChannelId);
+                                        WebSocket.Abort();
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.Warning(ex, "关闭WebSocket异常，执行强制中止");
+                                WebSocket.Abort();
                             }
                         }
-                        else
+                        else if (currentState != WebSocketState.Closed && currentState != WebSocketState.Aborted)
                         {
-                            var closeTask = Task.Run(() => WebSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "强制关闭", CancellationToken.None));
-                            if (!closeTask.Wait(5000))
-                            {
-                                _logger.Warning("WebSocket 关闭操作超时 {@0}", Account.ChannelId);
-
-                                // 如果关闭操作超时，则强制中止连接
-                                WebSocket?.Abort();
-                            }
+                            // 对于其他状态，直接强制中止
+                            LogInfo("WebSocket不处于可关闭状态，执行强制中止");
+                            WebSocket.Abort();
                         }
-                    }
-                }
-                catch
-                {
-                }
-
-                // 强制关闭
-                try
-                {
-                    if (WebSocket != null && (WebSocket.State == WebSocketState.Open || WebSocket.State == WebSocketState.CloseReceived))
-                    {
-                        LogInfo("强制关闭 wss open");
-
-                        WebSocket.Abort();
+                        
+                        // 释放资源
                         WebSocket.Dispose();
+                        WebSocket = null;
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    _logger.Warning(ex, "关闭WebSocket异常");
                 }
-
-                // // 释放消息处理器
-                // MessageProcessorDispose();
-
             }
-            catch
+            catch (Exception ex)
             {
-                // do
+                _logger.Error(ex, "CloseSocket方法异常");
             }
             finally
             {
@@ -1094,6 +1195,16 @@ namespace Midjourney.Infrastructure.Wss
                 _receiveTokenSource = null;
                 _receiveTask = null;
                 _heartbeatService = null;
+
+                // 释放解压缩资源
+                try
+                {
+                    _decompressor?.Dispose();
+                    _compressed?.Dispose();
+                    _decompressor = null;
+                    _compressed = null;
+                }
+                catch { }
 
                 LogInfo("WebSocket 资源已释放");
             }

@@ -1,11 +1,10 @@
-﻿
-
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.LoadBalancer;
 using Midjourney.Infrastructure.Services;
 using System.Net;
+using Serilog;
 
 namespace Midjourney.API.Controllers
 {
@@ -80,10 +79,14 @@ namespace Midjourney.API.Controllers
                 return BadRequest("演示模式，禁止操作");
             }
 
-            var queueTask = _discordLoadBalancer.GetQueueTasks().FirstOrDefault(t => t.Id == id);
-            if (queueTask != null)
+            // 调用负载均衡器的取消任务方法，取消队列和运行中的任务
+            try
             {
-                queueTask.Fail("主动取消任务");
+                _discordLoadBalancer.CancelTask(id, true);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
             }
 
             return Ok();

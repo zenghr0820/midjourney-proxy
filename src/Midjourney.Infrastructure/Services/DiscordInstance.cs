@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Caching.Memory;
 using Midjourney.Infrastructure.Data;
+using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.Services;
 using Midjourney.Infrastructure.Storage;
 using Midjourney.Infrastructure.Util;
@@ -30,15 +31,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
         private readonly ITaskStoreService _taskStoreService;
         private readonly INotifyService _notifyService;
 
-        /// <summary>
-        /// Discord频道池
-        /// </summary>
-        private readonly ConcurrentDictionary<string, DiscordChannel> _channelPool = new();
-
-        /// <summary>
-        /// 主频道ID（用于兼容旧逻辑）
-        /// </summary>
-        private string _primaryChannelId;
 
         private readonly CancellationTokenSource _longToken;
         private readonly Task _longTaskCache;
@@ -50,6 +42,13 @@ namespace Midjourney.Infrastructure.LoadBalancer
         private readonly string _discordInteractionUrl;
         private readonly IMemoryCache _cache;
         private readonly ITaskService _taskService;
+
+        /// <summary>
+        /// Discord频道池
+        /// </summary>
+        private readonly ChannelPoolManager _channelPoolManager;
+
+        public ChannelPoolManager ChannelPool => _channelPoolManager;
 
         private DiscordAccount _account;
 
@@ -115,7 +114,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// 获取所有频道ID
         /// </summary>
-        public List<string> AllChannelIds => _channelPool.Keys.ToList();
+        public List<string> AllChannelIds => _channelPoolManager.Channels.Select(c => c.ChannelId).ToList();
 
         /// <summary>
         /// 是否已初始化完成
@@ -144,7 +143,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             IWebProxy webProxy,
             ITaskService taskService)
         {
-            _logger = Log.Logger.ForContext("LogPrefix", account.GuildId);
+            _logger = Log.Logger.ForContext("LogPrefix", $"{account.GuildId} - instance");
 
             var hch = new HttpClientHandler
             {
@@ -166,182 +165,21 @@ namespace Midjourney.Infrastructure.LoadBalancer
             _taskStoreService = taskStoreService;
             _notifyService = notifyService;
 
-            // 初始化默认频道（主频道）
-            _primaryChannelId = account.ChannelId;
-            InitChannel(_primaryChannelId);
-
-            // 初始化频道池中的其他频道
-            if (account.ChannelIds != null)
-            {
-                foreach (var channel in account.ChannelIds)
-                {
-                    InitChannel(channel);
-                }
-            }
+            // 初始化频道池管理器
+            _channelPoolManager = new ChannelPoolManager(this);
+            // 订阅事件
+            _channelPoolManager.TaskChangeEvent += SaveAndNotify;
 
             var discordServer = _discordHelper.GetServer();
-
             _discordInteractionUrl = $"{discordServer}/api/v9/interactions";
 
             // 后台任务取消 token
             _longToken = new CancellationTokenSource();
 
-            // 为每个频道启动任务处理线程
-            foreach (var channel in _channelPool)
-            {
-                StartChannelTaskProcessing(channel.Value);
-            }
-
             // 启动缓存处理任务
             _longTaskCache = new Task(RuningCache, _longToken.Token, TaskCreationOptions.LongRunning);
             _longTaskCache.Start();
 
-            // 启动频道监控线程
-            StartChannelMonitoring();
-        }
-
-        /// <summary>
-        /// 初始化频道
-        /// </summary>
-        private void InitChannel(string channelId, string channelName = null)
-        {
-            if (string.IsNullOrWhiteSpace(channelId))
-                return;
-
-            if (!_channelPool.ContainsKey(channelId))
-            {
-                var channel = new DiscordChannel(
-                    channelId,
-                    channelName ?? channelId,
-                    Account.QueueSize,
-                    Math.Max(1, Math.Min(Account.CoreSize, 12))
-                );
-                channel.GuildId = Account.GuildId;
-                _channelPool.TryAdd(channelId, channel);
-            }
-        }
-
-        /// <summary>
-        /// 启动频道任务处理线程
-        /// </summary>
-        private void StartChannelTaskProcessing(DiscordChannel channel)
-        {
-            // 创建任务处理线程
-            Task.Factory.StartNew(() =>
-            {
-                _logger.Information("频道 {0} 任务处理线程启动", channel.ChannelId);
-
-                // 设置线程名称
-                Thread.CurrentThread.Name = $"Task-{channel.ChannelId}";
-
-                // 重置信号
-                channel.SignalControl.Reset();
-
-                while (true)
-                {
-                    try
-                    {
-                        // 如果处于取消状态，则退出
-                        if (_longToken.IsCancellationRequested)
-                        {
-                            break;
-                        }
-
-                        // 如果队列为空且没有运行中的任务，等待信号
-                        if (channel.QueueTasks.IsEmpty && channel.RunningTasks.IsEmpty)
-                        {
-                            channel.SignalControl.WaitOne(TimeSpan.FromSeconds(15));
-                            continue;
-                        }
-
-                        // 判断是否还有资源可用
-                        if (!channel.SemaphoreSlimLock.IsLockAvailable())
-                        {
-                            // 如果没有可用资源，等待
-                            Thread.Sleep(100);
-                            continue;
-                        }
-
-                        // 如果并发数修改，判断信号最大值是否为 Account.CoreSize
-                        if (channel.SemaphoreSlimLock.MaxParallelism != Account.CoreSize)
-                        {
-                            // 重新设置信号量
-                            var oldMax = channel.SemaphoreSlimLock.MaxParallelism;
-                            var newMax = Math.Max(1, Math.Min(Account.CoreSize, 12));
-                            if (channel.SemaphoreSlimLock.SetMaxParallelism(newMax))
-                            {
-                                _logger.Information("频道 {0} 信号量最大值修改成功，原值：{1}，当前最大值：{2}",
-                                    channel.ChannelId, oldMax, newMax);
-                            }
-
-                            Thread.Sleep(500);
-                            continue;
-                        }
-
-                        // 检查队列中是否有任务
-                        if (channel.QueueTasks.TryPeek(out var queueTask))
-                        {
-                            var preSleep = Account.Interval;
-                            if (preSleep <= 1.2m)
-                            {
-                                preSleep = 1.2m;
-                            }
-
-                            // 提交任务前间隔
-                            // 当一个作业完成后，是否先等待一段时间再提交下一个作业
-                            Thread.Sleep((int)(preSleep * 1000));
-
-                            // 从队列中移除任务，并开始执行
-                            if (channel.QueueTasks.TryDequeue(out var info))
-                            {
-                                // 使用原有的ExecuteTaskAsync方法执行任务
-                                channel.TaskFutureMap[info.Item1.Id] = ExecuteTaskAsync(channel, info.Item1, info.Item2);
-
-                                // 计算执行后的间隔
-                                var min = Account.AfterIntervalMin;
-                                var max = Account.AfterIntervalMax;
-
-                                // 计算 min ~ max随机数
-                                var afterInterval = 1200;
-                                if (max > min && min >= 1.2m)
-                                {
-                                    afterInterval = new Random().Next((int)(min * 1000), (int)(max * 1000));
-                                }
-                                else if (max == min && min >= 1.2m)
-                                {
-                                    afterInterval = (int)(min * 1000);
-                                }
-
-                                // 如果是图生文操作
-                                if (info.Item1.GetProperty<string>(Constants.TASK_PROPERTY_CUSTOM_ID, default)?.Contains("PicReader") == true)
-                                {
-                                    // 批量任务操作提交间隔 1.2s + 6.8s
-                                    Thread.Sleep(afterInterval + 6800);
-                                }
-                                else
-                                {
-                                    // 队列提交间隔
-                                    Thread.Sleep(afterInterval);
-                                }
-                            }
-                        }
-                        else
-                        {
-                            // 如果队列为空，重置信号
-                            channel.SignalControl.Reset();
-                            Thread.Sleep(100);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.Error(ex, "频道 {0} 任务处理线程异常", channel.ChannelId);
-                        // 发生异常时等待 3 秒再继续
-                        Thread.Sleep(3000);
-                    }
-                }
-
-                _logger.Information("频道 {0} 任务处理线程结束", channel.ChannelId);
-            }, _longToken.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         }
 
         /// <summary>
@@ -351,29 +189,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
         public void ClearAccountCache(string id)
         {
             _cache.Remove($"account:{id}");
-        }
-
-
-        /// <summary>
-        /// 获取指定频道
-        /// </summary>
-        public DiscordChannel GetChannel(string channelId)
-        {
-            // 使用智能选择逻辑获取频道ID
-            channelId = GetAvailableChannelId(channelId);
-
-            if (_channelPool.TryGetValue(channelId, out var channel))
-            {
-                return channel;
-            }
-
-            // 如果找不到指定频道，返回主频道
-            if (_primaryChannelId != channelId && _channelPool.TryGetValue(_primaryChannelId, out var primaryChannel))
-            {
-                return primaryChannel;
-            }
-
-            return null;
         }
 
         /// <summary>
@@ -386,7 +201,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             {
                 // 返回所有频道的任务
                 var tasks = new List<TaskInfo>();
-                foreach (var channel in _channelPool.Values)
+                foreach (var channel in _channelPoolManager.Channels)
                 {
                     tasks.AddRange(channel.GetRunningTasks());
                 }
@@ -395,8 +210,8 @@ namespace Midjourney.Infrastructure.LoadBalancer
             else
             {
                 // 返回指定频道的任务
-                var channel = GetChannel(channelId);
-                return channel?.GetRunningTasks() ?? new List<TaskInfo>();
+                var channel = _channelPoolManager.SelectChannel(channelId);
+                return channel?.GetRunningTasks() ?? [];
             }
         }
 
@@ -410,7 +225,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             {
                 // 返回所有频道的任务
                 var tasks = new List<TaskInfo>();
-                foreach (var channel in _channelPool.Values)
+                foreach (var channel in _channelPoolManager.Channels)
                 {
                     tasks.AddRange(channel.GetQueueTasks());
                 }
@@ -419,8 +234,8 @@ namespace Midjourney.Infrastructure.LoadBalancer
             else
             {
                 // 返回指定频道的任务
-                var channel = GetChannel(channelId);
-                return channel?.GetQueueTasks() ?? new List<TaskInfo>();
+                var channel = _channelPoolManager.SelectChannel(channelId);
+                return channel?.GetQueueTasks() ?? [];
             }
         }
 
@@ -429,16 +244,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// </summary>
         public bool IsIdleQueue(string channelId = null)
         {
-            if (string.IsNullOrWhiteSpace(channelId))
-            {
-                // 如果有任何一个频道有空闲，就返回true
-                return _channelPool.Values.Any(c => c.IsIdleQueue);
-            }
-            else
-            {
-                var channel = GetChannel(channelId);
-                return channel?.IsIdleQueue ?? false;
-            }
+            return _channelPoolManager.IsIdleQueue(channelId);
         }
 
         /// <summary>
@@ -447,29 +253,27 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <param name="task">任务信息</param>
         public void ExitTask(TaskInfo task)
         {
-            foreach (var channel in _channelPool.Values)
+            foreach (var channel in _channelPoolManager.Channels)
             {
-                if (channel.TaskFutureMap.TryRemove(task.Id, out _))
+                // 移除 TaskFutureMap 中指定的任务
+                channel.TaskFutureMap.TryRemove(task.Id, out _);
+                // 移除 QueueTasks 队列中指定的任务
+                if (channel.QueueTasks.Any(c => c.Item1.Id == task.Id))
                 {
-                    // 移除 QueueTasks 队列中指定的任务
-                    if (channel.QueueTasks.Any(c => c.Item1.Id == task.Id))
+                    var tempQueue = new ConcurrentQueue<(TaskInfo, Func<Task<Message>>)>();
+
+                    // 将不需要移除的元素加入到临时队列中
+                    while (channel.QueueTasks.TryDequeue(out var item))
                     {
-                        var tempQueue = new ConcurrentQueue<(TaskInfo, Func<Task<Message>>)>();
-
-                        // 将不需要移除的元素加入到临时队列中
-                        while (channel.QueueTasks.TryDequeue(out var item))
+                        if (item.Item1.Id != task.Id)
                         {
-                            if (item.Item1.Id != task.Id)
-                            {
-                                tempQueue.Enqueue(item);
-                            }
+                            tempQueue.Enqueue(item);
                         }
-
-                        // 交换队列引用
-                        channel.QueueTasks = tempQueue;
                     }
-                    break;
+                    // 交换队列引用
+                    channel.QueueTasks = tempQueue;
                 }
+                break;
             }
 
             SaveAndNotify(task);
@@ -485,7 +289,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             {
                 // 返回所有频道的任务
                 var futures = new Dictionary<string, Task>();
-                foreach (var channel in _channelPool.Values)
+                foreach (var channel in _channelPoolManager.Channels)
                 {
                     foreach (var item in channel.TaskFutureMap)
                     {
@@ -497,50 +301,9 @@ namespace Midjourney.Infrastructure.LoadBalancer
             else
             {
                 // 返回指定频道的任务
-                var channel = GetChannel(channelId);
+                var channel = _channelPoolManager.SelectChannel(channelId);
                 return channel?.TaskFutureMap.ToDictionary(k => k.Key, v => v.Value) ?? new Dictionary<string, Task>();
             }
-        }
-
-        /// <summary>
-        /// 获取可用频道ID
-        /// </summary>
-        /// <param name="preferredChannelId">优先使用的频道ID，如果为空则自动选择</param>
-        /// <returns>可用的频道ID</returns>
-        public string GetAvailableChannelId(string preferredChannelId = null)
-        {
-
-            // 1. 检查优先频道是否可用
-            if (!string.IsNullOrWhiteSpace(preferredChannelId) 
-                && _channelPool.TryGetValue(preferredChannelId, out var preferredChannel) 
-                && preferredChannel is { Enable: true, IsIdleQueue: true })
-            {
-                LogChannelSelection(preferredChannelId, isPreferred: true);
-                return preferredChannelId;
-            }
-
-            // 2. 选择最空闲的频道
-            var selectedChannel = _channelPool.Values
-                .Where(c => c.Enable && c.IsIdleQueue)
-                .OrderBy(c => c.QueueTasks.Count)
-                .ThenBy(c => c.RunningTasks.Count)
-                .FirstOrDefault();
-
-            var finalChannelId = selectedChannel?.ChannelId ?? preferredChannelId;
-            LogChannelSelection(finalChannelId, isPreferred: false);
-    
-            return finalChannelId;
-        }
-        
-        /// <summary>
-        /// 记录频道选择日志（结构化日志）
-        /// </summary>
-        private void LogChannelSelection(string channelId, bool isPreferred)
-        {
-            _logger.Information(
-                "频道选择结果 - 服务器: {GuildId}, 是否优先频道: {IsPreferred}, 最终频道: {ChannelId}",
-                GuildId, isPreferred, channelId
-            );
         }
 
         /// <summary>
@@ -552,7 +315,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <returns>任务提交结果</returns>
         public SubmitResultVO SubmitTaskAsync(TaskInfo info, Func<Task<Message>> discordSubmit, string channelId = null)
         {
-            var channel = GetChannel(channelId);
+            var channel = _channelPoolManager.SelectChannel(info.ChannelId ?? channelId);
             _logger.Information("选择的频道为：{0}, {1}", channel?.GuildId, channel?.ChannelId);
             if (channel == null)
             {
@@ -607,191 +370,26 @@ namespace Midjourney.Infrastructure.LoadBalancer
             }
         }
 
-        /// <summary>
-        /// 异步执行任务。
-        /// </summary>
-        /// <param name="channel">频道</param>
-        /// <param name="info">任务信息</param>
-        /// <param name="discordSubmit">Discord提交任务的委托</param>
-        /// <returns>异步任务</returns>
-        private async Task ExecuteTaskAsync(DiscordChannel channel, TaskInfo info, Func<Task<Message>> discordSubmit)
+        public void AddRunningTask(TaskInfo task)
         {
-            try
-            {
-                await channel.SemaphoreSlimLock.LockAsync();
-
-                channel.RunningTasks.TryAdd(info.Id, info);
-
-                // 判断当前实例是否可用，尝试最大等待 30s
-                var waitTime = 0;
-                while (!IsAlive)
-                {
-                    // 等待 1s
-                    await Task.Delay(1000);
-
-                    // 计算等待时间
-                    waitTime += 1000;
-                    if (waitTime > 30 * 1000)
-                    {
-                        break;
-                    }
-                }
-
-                // 判断当前实例是否可用
-                if (!IsAlive)
-                {
-                    _logger.Debug("[{@0}] task error, id: {@1}, status: {@2}", Account.GetDisplay(), info.Id, info.Status);
-
-                    info.Fail("实例不可用");
-                    SaveAndNotify(info);
-                    return;
-                }
-
-                info.Status = TaskStatus.SUBMITTED;
-                info.Progress = "0%";
-                SaveAndNotify(info);
-
-                var result = await discordSubmit();
-
-                // 判断当前实例是否可用
-                if (!IsAlive)
-                {
-                    _logger.Debug("[{@0}] task error, id: {@1}, status: {@2}", Account.GetDisplay(), info.Id, info.Status);
-
-                    info.Fail("实例不可用");
-                    SaveAndNotify(info);
-                    return;
-                }
-
-                info.StartTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
-
-                if (result.Code != ReturnCode.SUCCESS)
-                {
-                    _logger.Debug("[{@0}] task finished, id: {@1}, status: {@2}", Account.GetDisplay(), info.Id, info.Status);
-
-                    info.Fail(result.Description);
-                    SaveAndNotify(info);
-                    return;
-                }
-
-                info.Status = TaskStatus.SUBMITTED;
-                info.Progress = "0%";
-
-                await Task.Delay(500);
-
-                SaveAndNotify(info);
-
-                // 超时处理
-                var timeoutMin = Account.TimeoutMinutes;
-                var sw = new Stopwatch();
-                sw.Start();
-
-                while (info.Status == TaskStatus.SUBMITTED || info.Status == TaskStatus.IN_PROGRESS)
-                {
-                    SaveAndNotify(info);
-
-                    // 每 500ms
-                    await Task.Delay(500);
-
-                    if (sw.ElapsedMilliseconds > timeoutMin * 60 * 1000)
-                    {
-                        info.Fail($"执行超时 {timeoutMin} 分钟");
-                        SaveAndNotify(info);
-                        return;
-                    }
-                }
-
-                // 任务完成后，自动读消息
-                try
-                {
-                    // 成功才都消息
-                    if (info.Status == TaskStatus.SUCCESS)
-                    {
-                        var res = await ReadMessageAsync(info.MessageId);
-                        if (res.Code == ReturnCode.SUCCESS)
-                        {
-                            _logger.Debug("自动读消息成功 {@0} - {@1}", info.InstanceId, info.Id);
-                        }
-                        else
-                        {
-                            _logger.Warning("自动读消息失败 {@0} - {@1}", info.InstanceId, info.Id);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.Error(ex, "自动读消息异常 {@0} - {@1}", info.InstanceId, info.Id);
-                }
-
-                // 任务完成后，检查是否需要自动删除消息
-                try
-                {
-                    // 成功且是Imagine任务时尝试删除消息, 且账号设置了自动删除消息
-                    if (info.Status == TaskStatus.SUCCESS &&
-                        !string.IsNullOrWhiteSpace(info.MessageId) &&
-                        info.Action == TaskAction.IMAGINE &&
-                        Account.AutoDeleteMessages)
-                    {
-                        // 延迟1秒后删除，确保消息已被完全处理
-                        await Task.Delay(1000);
-
-                        // 使用SafeDeleteMessageAsync方法删除消息
-                        var deleteResult = await DeleteMessageAsync(info.MessageId);
-                        if (deleteResult.Code == ReturnCode.SUCCESS)
-                        {
-                            _logger.Information("自动删除消息成功 InstanceId: {@0} - TaskId: {@1} - MessageId: {@2}",
-                                info.InstanceId, info.Id, info.MessageId);
-                        }
-                        else
-                        {
-                            _logger.Warning("自动删除消息失败 InstanceId: {@0} - TaskId: {@1} - MessageId: {@2}: {3}",
-                                info.InstanceId, info.Id, info.MessageId, deleteResult.Description);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.Error(ex, "自动删除消息异常 InstanceId: {@0} - TaskId: {@1} - MessageId: {@2}", info.InstanceId, info.Id, info.MessageId);
-                }
-
-                _logger.Debug("[{AccountDisplay}] task finished, id: {TaskId}, status: {TaskStatus}", Account.GetDisplay(), info.Id, info.Status);
-
-                SaveAndNotify(info);
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "[{AccountDisplay}] task execute error, id: {TaskId}", Account.GetDisplay(), info.Id);
-
-                info.Fail("[Internal Server Error] " + ex.Message);
-
-                SaveAndNotify(info);
-            }
-            finally
-            {
-                channel.RunningTasks.TryRemove(info.Id, out _);
-                channel.TaskFutureMap.TryRemove(info.Id, out _);
-
-                channel.SemaphoreSlimLock.Unlock();
-
-                SaveAndNotify(info);
-            }
-        }
-
-        public void AddRunningTask(TaskInfo task, string channelId = null)
-        {
-            var channel = GetChannel(channelId);
+            var channel = _channelPoolManager.SelectChannel();
             if (channel != null)
             {
                 channel.RunningTasks.TryAdd(task.Id, task);
             }
         }
 
-        public void RemoveRunningTask(TaskInfo task, string channelId = null)
+        public void RemoveRunningTask(TaskInfo task)
         {
-            var channel = GetChannel(channelId);
-            if (channel != null)
+            // 获取任务对应的频道
+            var channelIds = _channelPoolManager.Channels.Where(c => c.RunningTasks.Keys.Contains(task.Id)).Select(c => c.ChannelId).ToList();
+            if (channelIds.Count > 0)
             {
-                channel.RunningTasks.TryRemove(task.Id, out _);
+                foreach (var channelId in channelIds)
+                {
+                    var channel = _channelPoolManager.SelectChannel(channelId);
+                    channel?.RunningTasks.TryRemove(task.Id, out _);
+                }
             }
         }
 
@@ -799,7 +397,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// 保存并通知任务状态变化。
         /// </summary>
         /// <param name="task">任务信息</param>
-        private void SaveAndNotify(TaskInfo task)
+        private Task SaveAndNotify(TaskInfo task)
         {
             try
             {
@@ -810,6 +408,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             {
                 _logger.Error(ex, "作业通知执行异常 {@0}", task.Id);
             }
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -829,7 +428,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <returns>任务信息</returns>
         public TaskInfo GetRunningTask(string id)
         {
-            foreach (var channel in _channelPool.Values)
+            foreach (var channel in _channelPoolManager.Channels)
             {
                 if (channel.RunningTasks.TryGetValue(id, out var task))
                 {
@@ -879,83 +478,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
             return FindRunningTask(c => c.MessageId == messageId).FirstOrDefault();
         }
 
-        /// <summary>
-        /// 释放资源
-        /// </summary>
-        public void Dispose()
-        {
-            try
-            {
-                _logger.Information("Discord实例 {GuildId}-{ChannelId} 开始释放资源", Account?.GuildId, Account?.ChannelId);
-
-                // 清除缓存
-                ClearAccountCache(Account?.Id);
-
-                WebSocketStarter?.CloseSocket();
-
-                // 任务取消
-                _longToken.Cancel();
-
-                // 清理频道资源
-                foreach (var channel in _channelPool.Values)
-                {
-                    // 通知所有频道的信号控制退出等待
-                    channel.SignalControl.Set();
-
-                    // 释放未完成的任务
-                    foreach (var runningTask in channel.RunningTasks)
-                    {
-                        runningTask.Value.Fail("强制取消");
-                    }
-
-                    // 清理任务队列
-                    while (channel.QueueTasks.TryDequeue(out var taskInfo))
-                    {
-                        taskInfo.Item1.Fail("强制取消");
-                    }
-
-                    // 释放任务映射
-                    foreach (var task in channel.TaskFutureMap.Values)
-                    {
-                        if (!task.IsCompleted)
-                        {
-                            try
-                            {
-                                task.Wait(); // 等待任务完成
-                            }
-                            catch
-                            {
-                                // Ignore exceptions from tasks
-                            }
-                        }
-                    }
-
-                    // 清理资源
-                    channel.Dispose();
-                }
-
-                // 清理后台缓存任务
-                if (_longTaskCache != null && !_longTaskCache.IsCompleted)
-                {
-                    try
-                    {
-                        _longTaskCache.Wait();
-                    }
-                    catch
-                    {
-                        // Ignore exceptions from cache task
-                    }
-                }
-
-                _channelPool.Clear();
-
-                _logger.Information("Discord实例 {GuildId}-{ChannelId} 资源释放完成", Account?.GuildId, Account?.ChannelId);
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "Discord实例 {GuildId}-{ChannelId} 释放资源时发生异常", Account?.GuildId, Account?.ChannelId);
-            }
-        }
 
         /// <summary>
         /// 替换通用交互参数
@@ -963,11 +485,11 @@ namespace Midjourney.Infrastructure.LoadBalancer
         private string ReplaceInteractionParams(string content, string nonce, EBotType? botType = null, string guid = null, string channelId = null)
         {
             // 使用智能选择逻辑获取频道ID
-            channelId = GetAvailableChannelId(channelId);
+            var channel = _channelPoolManager.SelectChannel(channelId);
 
             var str = content
                 .Replace("$guild_id", guid ?? Account.GuildId)
-                .Replace("$channel_id", channelId ?? Account.ChannelId)
+                .Replace("$channel_id", channel?.ChannelId ?? Account.ChannelId)
                 .Replace("$session_id", DefaultSessionId)
                 .Replace("$nonce", nonce);
 
@@ -986,7 +508,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// imagine 任务
         /// </summary>
-        public async Task<Message> ImagineAsync(TaskInfo info, string prompt, string nonce, string channelId = null)
+        public async Task<Message> ImagineAsync(TaskInfo info, string prompt, string nonce)
         {
 
             prompt = GetPrompt(prompt, info);
@@ -1367,13 +889,13 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// 解析描述
         /// </summary>
-        public async Task<Message> DescribeAsync(string finalFileName, string nonce, EBotType botType, string channelId = null)
+        public async Task<Message> DescribeAsync(string finalFileName, string nonce, EBotType botType)
         {
 
             string fileName = finalFileName.Substring(finalFileName.LastIndexOf("/") + 1);
 
             var json = botType == EBotType.NIJI_JOURNEY ? _paramsMap["describeniji"] : _paramsMap["describe"];
-            string paramsStr = ReplaceInteractionParams(json, nonce, null, channelId)
+            string paramsStr = ReplaceInteractionParams(json, nonce)
                 .Replace("$file_name", fileName)
                 .Replace("$final_file_name", finalFileName);
             return await PostJsonAndCheckStatusAsync(paramsStr);
@@ -1394,7 +916,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <summary>
         /// 上传一个较长的提示词，mj 可以返回一组简要的提示词
         /// </summary>
-        public async Task<Message> ShortenAsync(TaskInfo info, string prompt, string nonce, EBotType botType, string channelId = null)
+        public async Task<Message> ShortenAsync(TaskInfo info, string prompt, string nonce, EBotType botType)
         {
 
             prompt = GetPrompt(prompt, info);
@@ -1662,9 +1184,8 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// </summary>
         /// <param name="nonce"></param>
         /// <param name="botType"></param>
-        /// <param name="channelId">频道ID</param>
         /// <returns></returns>
-        public async Task<Message> FastAsync(string nonce, EBotType botType, string channelId = null)
+        public async Task<Message> FastAsync(string nonce, EBotType botType)
         {
 
             if (botType == EBotType.NIJI_JOURNEY && Account.EnableNiji != true)
@@ -1678,7 +1199,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             }
 
             var json = botType == EBotType.MID_JOURNEY ? _paramsMap["fast"] : _paramsMap["fastniji"];
-            var paramsStr = ReplaceInteractionParams(json, nonce, null, null, channelId);
+            var paramsStr = ReplaceInteractionParams(json, nonce, null, null, null);
             var obj = JObject.Parse(paramsStr);
             paramsStr = obj.ToString();
             return await PostJsonAndCheckStatusAsync(paramsStr);
@@ -1689,9 +1210,8 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// </summary>
         /// <param name="nonce"></param>
         /// <param name="botType"></param>
-        /// <param name="channelId">频道ID</param>
         /// <returns></returns>
-        public async Task<Message> RelaxAsync(string nonce, EBotType botType, string channelId = null)
+        public async Task<Message> RelaxAsync(string nonce, EBotType botType)
         {
 
             if (botType == EBotType.NIJI_JOURNEY && Account.EnableNiji != true)
@@ -1705,7 +1225,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             }
 
             var json = botType == EBotType.NIJI_JOURNEY ? _paramsMap["relax"] : _paramsMap["relaxniji"];
-            var paramsStr = ReplaceInteractionParams(json, nonce, null, null, channelId);
+            var paramsStr = ReplaceInteractionParams(json, nonce, null, null, null);
             var obj = JObject.Parse(paramsStr);
             paramsStr = obj.ToString();
             return await PostJsonAndCheckStatusAsync(paramsStr);
@@ -1729,14 +1249,14 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     // 判断 info 检查时间是否在 5 分钟内
                     if (Account.InfoUpdated != null && Account.InfoUpdated.Value.AddMinutes(5) >= DateTime.Now)
                     {
-                        _logger.Information("自动切换快速模式，验证 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+                        _logger.Information("自动切换快速模式，验证 {@0}", Account.GuildId);
 
                         // 提取 fastime
                         // 如果检查完之后，快速超过 1 小时，则标记为快速未用完
                         var fastTime = Account.FastTimeRemaining?.ToString()?.Split('/')?.FirstOrDefault()?.Trim();
                         if (!string.IsNullOrWhiteSpace(fastTime) && double.TryParse(fastTime, out var ftime) && ftime >= 1)
                         {
-                            _logger.Information("自动切换快速模式，开始 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+                            _logger.Information("自动切换快速模式，开始 {@0}", Account.GuildId);
 
                             // 标记未用完快速
                             Account.FastExhausted = false;
@@ -1756,19 +1276,19 @@ namespace Midjourney.Infrastructure.LoadBalancer
                             }
                             catch (Exception ex)
                             {
-                                _logger.Error(ex, "自动切换快速模式，执行异常 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+                                _logger.Error(ex, "自动切换快速模式，执行异常 {@0}", Account.GuildId);
                             }
 
                             ClearAccountCache(Account.Id);
 
-                            _logger.Information("自动切换快速模式，执行完成 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+                            _logger.Information("自动切换快速模式，执行完成 {@0}", Account.GuildId);
                         }
                     }
                 }
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "快速切换慢速模式，检查执行异常 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+                _logger.Error(ex, "快速切换慢速模式，检查执行异常 {@0}", Account.GuildId);
             }
         }
 
@@ -1786,7 +1306,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 {
                     try
                     {
-                        _logger.Information("随机同步账号信息开始 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+                        _logger.Information("随机同步账号信息开始 {@0}", Account.GuildId);
 
                         // 随机 6~12 小时
                         var random = new Random();
@@ -1795,13 +1315,13 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
                         await _taskService.InfoSetting(Account.Id);
 
-                        _logger.Information("随机同步账号信息完成 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+                        _logger.Information("随机同步账号信息完成 {@0}", Account.GuildId);
 
                         return true;
                     }
                     catch (Exception ex)
                     {
-                        _logger.Error(ex, "随机同步账号信息异常 {@0} - {@1}", Account.GuildId, Account.ChannelId);
+                        _logger.Error(ex, "随机同步账号信息异常 {@0}", Account.GuildId);
                     }
 
                     return false;
@@ -2022,7 +1542,12 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// </summary>
         public async Task<Message> UploadAsync(string fileName, DataUrl dataUrl, bool useDiscordUpload = false, string channelId = null)
         {
-            channelId = GetAvailableChannelId(channelId);
+            var channel = _channelPoolManager.SelectChannel(channelId);
+
+            if (channel == null)
+            {
+                return Message.Of(ReturnCode.VALIDATION_ERROR, "频道不存在");
+            }
 
             // 保存用户上传的 base64 到文件存储
             if (GlobalConfiguration.Setting.EnableSaveUserUploadBase64 && !useDiscordUpload)
@@ -2100,16 +1625,21 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
         public async Task<Message> SendImageMessageAsync(string content, string finalFileName, string channelId = null)
         {
-            channelId = GetAvailableChannelId(channelId);
+            var channel = _channelPoolManager.SelectChannel(channelId);
+
+            if (channel == null)
+            {
+                return Message.Of(ReturnCode.VALIDATION_ERROR, "频道不存在");
+            }
 
             string fileName = finalFileName.Substring(finalFileName.LastIndexOf("/") + 1);
             string paramsStr = _paramsMap["message"]
                 .Replace("$content", content)
-                .Replace("$channel_id", channelId)
+                .Replace("$channel_id", channel.ChannelId)
                 .Replace("$file_name", fileName)
                 .Replace("$final_file_name", finalFileName);
 
-            var discordMessageUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channelId}/messages";
+            var discordMessageUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channel.ChannelId}/messages";
             HttpResponseMessage response = await PostJsonAsync(discordMessageUrl, paramsStr);
             if (response.StatusCode != System.Net.HttpStatusCode.OK)
             {
@@ -2133,15 +1663,20 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <returns></returns>
         public async Task<Message> ReadMessageAsync(string lastMessageId, string channelId = null)
         {
-            channelId = GetAvailableChannelId(channelId);
+            var channel = _channelPoolManager.SelectChannel(channelId);
 
             if (string.IsNullOrWhiteSpace(lastMessageId))
             {
                 return Message.Of(ReturnCode.VALIDATION_ERROR, "lastMessageId 不能为空");
             }
 
+            if (channel == null)
+            {
+                return Message.Of(ReturnCode.VALIDATION_ERROR, "频道不存在");
+            }
+
             var paramsStr = @"{""token"":null,""last_viewed"":3496}";
-            var discordMessageUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channelId}/messages";
+            var discordMessageUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channel.ChannelId}/messages";
             var url = $"{discordMessageUrl}/{lastMessageId}/ack";
 
             HttpResponseMessage response = await PostJsonAsync(url, paramsStr);
@@ -2161,14 +1696,19 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <returns>删除结果</returns>
         public async Task<Message> DeleteMessageAsync(string messageId, string channelId = null)
         {
-            channelId = GetAvailableChannelId(channelId);
+            var channel = _channelPoolManager.SelectChannel(channelId);
 
             if (string.IsNullOrWhiteSpace(messageId))
             {
                 return Message.Of(ReturnCode.VALIDATION_ERROR, "messageId 不能为空");
             }
 
-            var discordMessageUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channelId}/messages";
+            if (channel == null)
+            {
+                return Message.Of(ReturnCode.VALIDATION_ERROR, "频道不存在");
+            }
+
+            var discordMessageUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channel.ChannelId}/messages";
             var url = $"{discordMessageUrl}/{messageId}";
 
             try
@@ -2196,7 +1736,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// <returns>带前缀的 token</returns>
         public string GetPrefixedToken()
         {
-            if (!string.IsNullOrEmpty(Account.BotToken))
+            if (Account.UseBotWss && !string.IsNullOrEmpty(Account.BotToken))
             {
                 return $"Bot {Account.BotToken}";
             }
@@ -2205,243 +1745,125 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
         public Task OnChannelSubscribe(ConcurrentDictionary<string, DiscordExtendedGuild> guilds)
         {
+            if (!Account.EnableAutoFetchChannels) return Task.CompletedTask;
             _logger.Information("ChannelSubscribe 频道事件触发，开始更新频道数据");
             // 匹配对应的服务器
             if (!guilds.TryGetValue(Account.GuildId, out var guild) || guild == null) return Task.CompletedTask;
-            var newChannelIds = guild?.Channels.Where(c => c.Type == ChannelType.Text).Select(c => c.Id).ToList();
+            // 获取所有文本频道
+            var newChannelIds = guild.Channels?.Where(c => c.Type == ChannelType.Text).Select(c => c.Id).ToList();
+            if (newChannelIds == null || newChannelIds.Count <= 0)
+            {
+                return Task.CompletedTask;
+            }
             _logger.Information("匹配对应的服务器[{0}], 当前频道数为 - [{1}], 频道变更后数量为 - [{2}]", guild.Id,
-                _channelPool.Count, newChannelIds.Count);
+                _channelPoolManager.Channels.Count, newChannelIds.Count);
             // 更新账号的 频道id 列表
             Account.ChannelIds = newChannelIds;
-            DbHelper.Instance.AccountStore.Update(Account);
+            DbHelper.Instance.AccountStore.Update("ChannelIds", Account);
             ClearAccountCache(Account.Id);
             // 更新频道数据
-            UpdateChannelPool(newChannelIds);
+            _channelPoolManager.UpdateChannelPool(newChannelIds);
 
             return Task.CompletedTask;
         }
 
-        /// <summary>
-        /// 更新频道池
-        /// </summary>
-        /// <param name="newChannelIds">新的频道ID列表</param>
-        public void UpdateChannelPool(List<string> newChannelIds)
+        public Task OnDmChannelSubscribe(ConcurrentDictionary<string, DiscordChannelDto> channels)
         {
-            if (newChannelIds == null)
-                return;
+            if (!Account.EnableAutoFetchChannels) return Task.CompletedTask;
+            _logger.Information("DmChannelSubscribe 私信频道事件触发，开始更新账号的私信频道数据");
 
-            _logger.Information("开始更新频道池，当前频道数：{0}，新频道数：{1}", _channelPool.Count, newChannelIds.Count);
-
-            // 找出需要添加的频道
-            var channelsToAdd = newChannelIds.Where(id => !string.IsNullOrWhiteSpace(id) && !_channelPool.ContainsKey(id)).ToList();
-
-            // 找出需要移除的频道
-            var channelsToRemove = _channelPool.Keys.Where(id => !newChannelIds.Contains(id) && id != _primaryChannelId).ToList();
-
-            // 处理需要移除的频道
-            foreach (var channelId in channelsToRemove)
+            if (channels != null && channels.Count > 0)
             {
-                RemoveChannel(channelId);
-            }
-
-            // 处理需要添加的频道
-            foreach (var channelId in channelsToAdd)
-            {
-                AddChannel(channelId);
-            }
-
-            _logger.Information("频道池更新完成，当前频道数：{0}", _channelPool.Count);
-        }
-
-        /// <summary>
-        /// 添加新频道到频道池
-        /// </summary>
-        /// <param name="channelId">频道ID</param>
-        /// <param name="channelName">频道名称，可选</param>
-        public void AddChannel(string channelId, string channelName = null)
-        {
-            if (string.IsNullOrWhiteSpace(channelId) || _channelPool.ContainsKey(channelId))
-                return;
-
-            _logger.Information("添加新频道：{0}", channelId);
-
-            // 使用现有的InitChannel方法初始化频道
-            InitChannel(channelId, channelName);
-
-            // 获取新添加的频道
-            if (_channelPool.TryGetValue(channelId, out var channel))
-            {
-                // 启动该频道的任务处理线程
-                StartChannelTaskProcessing(channel);
-
-                _logger.Information("新频道 {0} 添加完成并启动任务处理线程", channelId);
-            }
-        }
-
-        /// <summary>
-        /// 从频道池移除频道
-        /// </summary>
-        /// <param name="channelId">频道ID</param>
-        public void RemoveChannel(string channelId)
-        {
-            // 不允许移除主频道
-            if (string.IsNullOrWhiteSpace(channelId) || channelId == _primaryChannelId)
-                return;
-
-            _logger.Information("移除频道：{0}", channelId);
-
-            // 尝试从频道池中获取并移除频道
-            if (_channelPool.TryRemove(channelId, out var channel))
-            {
-                try
+                var nijiBotChannelId = string.Empty;
+                var privateChannelId = string.Empty;
+                foreach (var channel in channels)
                 {
-                    // 通知该频道的信号控制退出等待
-                    channel.SignalControl.Set();
-
-                    // 取消所有正在运行的任务
-                    foreach (var runningTask in channel.RunningTasks)
+                    if (channel.Value.RecipientsIds != null && channel.Value.RecipientsIds.Length > 0)
                     {
-                        runningTask.Value.Fail("频道已移除");
-                        SaveAndNotify(runningTask.Value);
-                    }
-
-                    // 清理任务队列
-                    while (channel.QueueTasks.TryDequeue(out var taskInfo))
-                    {
-                        taskInfo.Item1.Fail("频道已移除");
-                        SaveAndNotify(taskInfo.Item1);
-                    }
-
-                    // 释放资源
-                    channel.Dispose();
-
-                    _logger.Information("频道 {0} 已成功移除", channelId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.Error(ex, "移除频道 {0} 时发生错误", channelId);
-                }
-            }
-        }
-
-        /// <summary>
-        /// 定时检查账号频道列表是否有变动
-        /// </summary>
-        private void StartChannelMonitoring()
-        {
-            Task.Factory.StartNew(async () =>
-            {
-                _logger.Information("频道监控线程启动");
-
-                while (true)
-                {
-                    try
-                    {
-                        // 如果处于取消状态，则退出
-                        if (_longToken.IsCancellationRequested)
+                        // 匹配 niji 机器人
+                        if (channel.Value.RecipientsIds.Contains(Constants.NIJI_APPLICATION_ID))
                         {
-                            break;
+                            _logger.Information("匹配 NIJI 机器人私信频道: {0}", channel.Key);
+                            nijiBotChannelId = channel.Key;
                         }
-
-                        // 从数据库获取最新的账号信息
-                        var latestAccount = DbHelper.Instance.AccountStore.Get(Account.Id);
-                        if (latestAccount != null)
+                        // 匹配 midjourney 机器人
+                        if (channel.Value.RecipientsIds.Contains(Constants.MJ_APPLICATION_ID))
                         {
-                            // 检查频道列表是否有变动
-                            var currentChannelIds = _channelPool.Keys.ToList();
-                            var newChannelIds = new List<string>();
-
-                            // 添加账号中的频道ID
-                            if (latestAccount.ChannelIds != null)
-                            {
-                                newChannelIds.AddRange(latestAccount.ChannelIds);
-                            }
-
-                            // 确保主频道始终存在
-                            if (!newChannelIds.Contains(_primaryChannelId))
-                            {
-                                newChannelIds.Add(_primaryChannelId);
-                            }
-
-                            // 检查是否有变动
-                            if (!currentChannelIds.OrderBy(x => x).SequenceEqual(newChannelIds.OrderBy(x => x)))
-                            {
-                                _logger.Information("检测到频道列表变动，进行更新");
-                                UpdateChannelPool(newChannelIds);
-
-                                // 更新账号信息
-                                _account = latestAccount;
-                                ClearAccountCache(Account.Id);
-                            }
+                            _logger.Information("匹配 MIDJOURNEY 机器人私信频道: {0}", channel.Key);
+                            privateChannelId = channel.Key;
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        _logger.Error(ex, "频道监控线程异常");
-                    }
-
-                    // 每5分钟检查一次
-                    await Task.Delay(TimeSpan.FromMinutes(5), _longToken.Token);
                 }
+                if (!string.IsNullOrEmpty(nijiBotChannelId) && !string.IsNullOrEmpty(privateChannelId))
+                {
+                    Account.NijiBotChannelId = nijiBotChannelId;
+                    Account.PrivateChannelId = privateChannelId;
+                    DbHelper.Instance.AccountStore.Update("NijiBotChannelId,PrivateChannelId", Account);
+                    ClearAccountCache(Account.Id);
+                }
+            }
 
-                _logger.Information("频道监控线程结束");
-            }, _longToken.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+            return Task.CompletedTask;
         }
 
+
         /// <summary>
-        /// 手动刷新频道池
+        /// 释放资源
         /// </summary>
-        /// <returns>刷新结果</returns>
-        public bool RefreshChannelPool()
+        public void Dispose()
         {
             try
             {
-                _logger.Information("手动刷新频道池开始");
+                _logger.Information("Discord实例 {0}-{1} 开始释放资源", Account?.GuildId, Account?.Remark);
 
-                // 从数据库获取最新的账号信息
+                // 清除缓存
+                ClearAccountCache(Account?.Id);
 
-                var latestAccount = DbHelper.Instance.AccountStore.Get(Account.Id);
-                if (latestAccount != null)
-                {
-                    // 更新账号信息
-                    _account = latestAccount;
-                    ClearAccountCache(Account.Id);
+                WebSocketStarter?.CloseSocket();
 
-                    // 准备频道ID列表
+                // 任务取消
+                _longToken.Cancel();
 
-                    var newChannelIds = new List<string>();
+                // 清理频道资源
+                _channelPoolManager.Dispose();
 
-                    // 添加账号中的频道ID
-
-                    if (latestAccount.ChannelIds != null)
-                    {
-                        newChannelIds.AddRange(latestAccount.ChannelIds);
-                    }
-
-                    // 确保主频道始终存在
-
-                    if (!newChannelIds.Contains(_primaryChannelId))
-                    {
-                        newChannelIds.Add(_primaryChannelId);
-                    }
-
-                    // 更新频道池
-
-                    UpdateChannelPool(newChannelIds);
-
-
-                    _logger.Information("手动刷新频道池完成");
-                    return true;
-                }
-
-
-                return false;
+                _logger.Information("Discord实例 {0}-{1} 资源释放完成", Account?.GuildId, Account?.Remark);
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "手动刷新频道池异常");
-                return false;
+                _logger.Error(ex, "Discord实例 {0}-{1} 释放资源时发生异常", Account?.GuildId, Account?.Remark);
             }
         }
+
+        /// <summary>
+        /// 移除指定任务（包括队列和运行中的任务）
+        /// </summary>
+        /// <param name="task">要移除的任务</param>
+        /// <param name="reason">失败原因，如果不为空则将任务标记为失败</param>
+        public void RemoveTask(TaskInfo task, string reason = null)
+        {
+            if (task == null)
+            {
+                return;
+            }
+
+            // 如果提供了失败原因，则标记任务为失败
+            if (!string.IsNullOrWhiteSpace(reason))
+            {
+                task.Fail(reason);
+            }
+
+            // 遍历所有频道，查找并移除任务
+            foreach (var channel in _channelPoolManager.Channels)
+            {
+                // 使用频道的RemoveTask方法移除任务
+                channel.RemoveTask(task.Id, reason);
+            }
+
+            // 无论任务是否被移除，都通知任务状态变化
+            SaveAndNotify(task);
+        }
+
     }
 }

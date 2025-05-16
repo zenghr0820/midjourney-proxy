@@ -1,4 +1,6 @@
-﻿using Midjourney.Infrastructure.Dto;
+﻿using Midjourney.Infrastructure.Data;
+using Midjourney.Infrastructure.Dto;
+using System.Collections.Concurrent;
 
 namespace Midjourney.Infrastructure.LoadBalancer
 {
@@ -173,9 +175,24 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     }
 
                     // 如果指定了账号 ID，但是不在指定 ID 列表中，则不符合条件
-                    if (ids?.Count > 0 && !ids.Contains(model.Account.ChannelId))
+                    if (ids?.Count > 0)
                     {
-                        return null;
+                        if (model.AllChannelIds.Count > 0)
+                        {
+                            var isContains = false;
+                            foreach (var cId in model.AllChannelIds)
+                            {
+                                if (ids.Contains(cId))
+                                {
+                                    isContains = true;
+                                    break;
+                                }
+                            }
+                            if (!isContains)
+                            {
+                                return null;
+                            }
+                        }
                     }
                 }
 
@@ -231,7 +248,19 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     .WhereIf(isDomain == false, c => c.Account.IsVerticalDomain != true)
 
                     // 过滤指定账号
-                    .WhereIf(ids?.Count > 0, c => ids.Contains(c.Account.ChannelId))
+                    .WhereIf(ids?.Count > 0, c =>
+                    {
+                        var isContains = false;
+                        foreach (var cId in c.AllChannelIds)
+                        {
+                            if (ids.Contains(cId))
+                            {
+                                isContains = true;
+                                break;
+                            }
+                        }
+                        return isContains;
+                    })
 
                     // 如果指定了频道ID，则过滤包含该频道的实例
                     .WhereIf(!string.IsNullOrWhiteSpace(channelId), c => c.AllChannelIds.Contains(channelId))
@@ -279,13 +308,9 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
             // 先检查是否有存活实例的主频道ID匹配
             var instance = _instances.FirstOrDefault(c => c.GuildId == instanceId && c.IsAlive);
-            if (instance != null)
-            {
-                return instance;
-            }
-
-            // 如果没有找到，检查是否有存活实例包含此频道ID
-            return _instances.FirstOrDefault(c => c.AllChannelIds.Contains(instanceId) && c.IsAlive);
+            return instance;
+            // // 如果没有找到，检查是否有存活实例包含此频道ID
+            // return _instances.FirstOrDefault(c => c.AllChannelIds.Contains(instanceId) && c.IsAlive);
         }
 
         /// <summary>
@@ -370,5 +395,67 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// </summary>
         /// <param name="instance"></param>
         public void RemoveInstance(DiscordInstance instance) => _instances.Remove(instance);
+
+        /// <summary>
+        /// 根据任务获取所属的Discord实例
+        /// </summary>
+        /// <param name="task">任务信息</param>
+        /// <returns>Discord实例</returns>
+        public DiscordInstance GetInstanceByTask(TaskInfo task)
+        {
+            if (task == null)
+            {
+                return null;
+            }
+
+            // 根据任务的InstanceId获取实例
+            if (!string.IsNullOrWhiteSpace(task.InstanceId))
+            {
+                var instance = GetDiscordInstanceIsAlive(task.InstanceId);
+                if (instance != null && instance.IsAlive)
+                {
+                    return instance;
+                }
+            }
+
+            // 根据任务的ChannelId获取实例
+            if (!string.IsNullOrWhiteSpace(task.ChannelId))
+            {
+                var instance = GetDiscordInstanceByChannelId(task.ChannelId, true);
+                if (instance != null)
+                {
+                    return instance;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 取消任务
+        /// </summary>
+        /// <param name="taskId">任务ID</param>
+        /// <param name="isCancelRunning">是否取消运行中的任务</param>
+        public void CancelTask(string taskId, bool isCancelRunning = false)
+        {
+            if (string.IsNullOrWhiteSpace(taskId))
+            {
+                throw new LogicException("任务ID不能为空");
+            }
+            
+            // 获取任务信息
+            var dbTask = DbHelper.Instance.TaskStore.Get(taskId);
+            if (dbTask == null || dbTask.Status == TaskStatus.FAILURE || dbTask.Status == TaskStatus.SUCCESS)
+            {
+                throw new LogicException("任务已完成或已失败");
+            }
+            
+            // 尝试找到可能处理这个任务的实例
+            var instance = GetInstanceByTask(dbTask);
+            if(instance == null) {
+                throw new LogicException($"未找到任务对应的实例");
+            }
+            instance.RemoveTask(dbTask, "主动取消任务");
+        }
     }
 }

@@ -70,6 +70,7 @@ namespace Midjourney.Infrastructure.Wss
             
             // 设置事件订阅
             socketStarter.ChannelSubscribeEvent += instance.OnChannelSubscribe;
+            socketStarter.DmChannelEvent += instance.OnDmChannelSubscribe;
             
             // 设置WebSocketStarter到Discord实例
             instance.WebSocketStarter = socketStarter;

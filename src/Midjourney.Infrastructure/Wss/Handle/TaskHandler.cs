@@ -1,6 +1,7 @@
 using Serilog;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.LoadBalancer;
+using Midjourney.Infrastructure.Util;
 
 namespace Midjourney.Infrastructure.Wss.Handle
 {
@@ -25,6 +26,21 @@ namespace Midjourney.Infrastructure.Wss.Handle
             string finalPrompt,
             MessageWrapper message)
         {
+
+            // 跳过 Waiting to start 消息
+            if (MessageParser.IsWaitingToStart(message.Content))
+            {
+                return null;
+            }
+
+            // 判断消息是否处理过了
+            CacheHelper<string, bool>.TryAdd(message.Id, false);
+            if (CacheHelper<string, bool>.Get(message.Id))
+            {
+                Log.Debug("消息已经处理过了 {@0}", message.Id);
+                return null;
+            }
+
             var task = FindTask(instance, message, action, finalPrompt);
 
             if (task == null || task.Status == TaskStatus.SUCCESS || task.Status == TaskStatus.FAILURE)
@@ -362,7 +378,10 @@ namespace Midjourney.Infrastructure.Wss.Handle
 
             task.Success();
 
-            Log.Debug("由 {@0} 确认消息处理完成 {@1}", message.MessageHandler, message.Id);
+            // 表示消息已经处理过了
+            CacheHelper<string, bool>.AddOrUpdate(message.Id.ToString(), true);
+
+            Log.Debug("确认消息处理完成 {0}", message.Id);
         }
 
         /// <summary>

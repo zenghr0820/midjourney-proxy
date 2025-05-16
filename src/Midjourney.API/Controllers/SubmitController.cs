@@ -90,7 +90,7 @@ namespace Midjourney.API.Controllers
         }
 
         /// <summary>
-        /// 提交Imagine任务
+        /// 提交Imagine绘画任务
         /// </summary>
         /// <param name="imagineDTO">提交Imagine任务的DTO</param>
         /// <returns>提交结果</returns>

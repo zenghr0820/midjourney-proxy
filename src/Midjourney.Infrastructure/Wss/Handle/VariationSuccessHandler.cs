@@ -1,6 +1,5 @@
 
 using Midjourney.Infrastructure.LoadBalancer;
-using Serilog;
 
 namespace Midjourney.Infrastructure.Wss.Handle
 {
@@ -13,10 +12,10 @@ namespace Midjourney.Infrastructure.Wss.Handle
         {
         }
 
-        public override string MessageHandleType => "Variation-Success-Handler";
+        public override string MessageHandleType => "VariationSuccessHandler";
 
         /// <summary>
-        /// 处理通用消息
+        /// 处理变体图像成功消息
         /// </summary>
         protected override void HandleMessage(DiscordInstance instance, MessageType messageType, MessageWrapper message)
         {

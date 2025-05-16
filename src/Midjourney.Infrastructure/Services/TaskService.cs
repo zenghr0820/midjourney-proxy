@@ -456,7 +456,7 @@ namespace Midjourney.Infrastructure.Services
                     finalFileNames.Add(uploadResult.Description);
                 }
                 return await discordInstance.BlendAsync(finalFileNames, dimensions,
-                    task.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default), task.RealBotType ?? task.BotType);
+                    task.GetProperty<string>(Constants.TASK_PROPERTY_NONCE, default), task.RealBotType ?? task.BotType, task.ChannelId);
             });
         }
 
@@ -468,8 +468,8 @@ namespace Midjourney.Infrastructure.Services
         /// <returns></returns>
         public SubmitResultVO SubmitAction(TaskInfo task, SubmitActionDTO submitAction)
         {
-            Log.Information("task = {0 }, ChannelId = {1}", task, task.ChannelId);
-            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(task.SubInstanceId ?? task.ChannelId);
+            Log.Information("task = {@0}, ChannelId = {@1}", task, task.ChannelId);
+            var discordInstance = _discordLoadBalancer.GetDiscordInstanceByChannelId(task.SubInstanceId ?? task.ChannelId, true);
             if (discordInstance == null)
             {
                 // 如果主实例没有找子实例
@@ -770,7 +770,7 @@ namespace Midjourney.Infrastructure.Services
         /// <returns></returns>
         public SubmitResultVO SubmitModal(TaskInfo task, SubmitModalDTO submitAction, DataUrl dataUrl = null)
         {
-            var discordInstance = _discordLoadBalancer.GetDiscordInstanceIsAlive(task.SubInstanceId ?? task.ChannelId);
+            var discordInstance = _discordLoadBalancer.GetDiscordInstanceByChannelId(task.SubInstanceId ?? task.ChannelId, true);
             if (discordInstance == null)
             {
                 // 如果主实例没有找子实例
@@ -1151,18 +1151,22 @@ namespace Midjourney.Infrastructure.Services
             }
 
             // 获取发送的频道
-            var channelId = discordInstance.GetAvailableChannelId();
+            var channel = discordInstance.ChannelPool.SelectChannel();
+            if (channel == null)
+            {
+                throw new LogicException("无可用的频道");
+            }
 
             if (discordInstance.Account.EnableMj == true)
             {
-                var res3 = await discordInstance.SettingAsync(SnowFlake.NextId(), EBotType.MID_JOURNEY, channelId);
+                var res3 = await discordInstance.SettingAsync(SnowFlake.NextId(), EBotType.MID_JOURNEY, channel.ChannelId);
                 if (res3.Code != ReturnCode.SUCCESS)
                 {
                     throw new LogicException(res3.Description);
                 }
                 Thread.Sleep(2500);
 
-                var res0 = await discordInstance.InfoAsync(SnowFlake.NextId(), EBotType.MID_JOURNEY, channelId);
+                var res0 = await discordInstance.InfoAsync(SnowFlake.NextId(), EBotType.MID_JOURNEY, channel.ChannelId);
                 if (res0.Code != ReturnCode.SUCCESS)
                 {
                     throw new LogicException(res0.Description);
@@ -1177,14 +1181,14 @@ namespace Midjourney.Infrastructure.Services
                     // 如果没有开启 NIJI 转 MJ
                     if (GlobalConfiguration.Setting.EnableConvertNijiToMj == false)
                     {
-                        var res2 = await discordInstance.SettingAsync(SnowFlake.NextId(), EBotType.NIJI_JOURNEY, channelId);
+                        var res2 = await discordInstance.SettingAsync(SnowFlake.NextId(), EBotType.NIJI_JOURNEY, channel.ChannelId);
                         if (res2.Code != ReturnCode.SUCCESS)
                         {
                             throw new LogicException(res2.Description);
                         }
                         Thread.Sleep(2500);
 
-                        var res = await discordInstance.InfoAsync(SnowFlake.NextId(), EBotType.NIJI_JOURNEY, channelId);
+                        var res = await discordInstance.InfoAsync(SnowFlake.NextId(), EBotType.NIJI_JOURNEY, channel.ChannelId);
                         if (res.Code != ReturnCode.SUCCESS)
                         {
                             throw new LogicException(res.Description);

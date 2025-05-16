@@ -18,10 +18,10 @@ namespace Midjourney.Infrastructure.Wss.Handle
 
         public override int Order() => 99998;
 
-        public override string MessageHandleType => "Blend-Success-Handler";
+        public override string MessageHandleType => "BlendSuccessHandler";
 
         /// <summary>
-        /// 处理通用消息
+        /// 处理混合图像成功消息
         /// </summary>
         protected override void HandleMessage(DiscordInstance instance, MessageType messageType, MessageWrapper message)
         {

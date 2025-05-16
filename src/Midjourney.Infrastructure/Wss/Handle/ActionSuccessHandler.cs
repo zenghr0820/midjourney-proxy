@@ -5,7 +5,7 @@ using Serilog;
 namespace Midjourney.Infrastructure.Wss.Handle
 {
     /// <summary>
-    /// 通用的动作成功处理程序
+    /// 动作执行成功处理程序
     /// </summary>
     public class ActionSuccessHandler : MessageHandler
     {
@@ -14,23 +14,16 @@ namespace Midjourney.Infrastructure.Wss.Handle
         {
         }
 
-        public override string MessageHandleType => "Action-Success-Handler";
+        public override string MessageHandleType => "ActionSuccessHandler";
 
         public override int Order() => 99999;
 
         /// <summary>
-        /// 处理通用消息
+        /// 处理动作执行成功消息
         /// </summary>
         protected override void HandleMessage(DiscordInstance instance, MessageType messageType, MessageWrapper message)
         {
-            // 判断消息是否处理过了
-            CacheHelper<string, bool>.TryAdd(message.Id, false);
-            if (CacheHelper<string, bool>.Get(message.Id))
-            {
-                Log.Debug("{0} 消息已经处理过了 {@1}", message.IsSocketMessage ? "BOT" : "USER", message.Id);
-                return;
-            }
-
+ 
             string content = message.Content;
             var parseData = ConvertUtils.ParseContent(content, MessageParser.RegexPatterns.CONTENT_REGEX);
             var parseActionData = GetActionContent(content);

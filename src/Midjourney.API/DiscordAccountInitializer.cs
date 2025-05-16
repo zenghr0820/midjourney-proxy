@@ -510,7 +510,7 @@ namespace Midjourney.API
                 sw.Start();
 
                 var info = new StringBuilder();
-                info.AppendLine($"[{account.Id} {account.Remark}] - 初始化中...");
+                info.AppendLine($"[{account.GuildId} {account.Remark}] - 初始化中...");
                 info.AppendLine("======================Start==========================");
 
                 var db = DbHelper.Instance.AccountStore;
@@ -670,7 +670,7 @@ namespace Midjourney.API
                             try
                             {
                                 // 启动后执行 info setting 操作
-                                await _taskService.InfoSetting(account.Id);
+                                // await _taskService.InfoSetting(account.Id);
                             }
                             catch (Exception ex)
                             {
@@ -931,6 +931,12 @@ namespace Midjourney.API
                         param.FishingTime = null;
                     }
                 }
+                
+                // 验证Bot Token
+                if (param.UseBotWss && string.IsNullOrWhiteSpace(param.BotToken))
+                {
+                    param.UseBotWss = false;
+                }
 
                 model.LoginAccount = param.LoginAccount?.Trim();
                 model.LoginPassword = param.LoginPassword?.Trim();
@@ -964,6 +970,8 @@ namespace Midjourney.API
                 model.AfterIntervalMax = param.AfterIntervalMax;
                 model.Sort = param.Sort;
                 model.Enable = param.Enable;
+                model.EnableAutoFetchChannels = param.EnableAutoFetchChannels;
+                model.UseBotWss = param.UseBotWss;
                 model.PrivateChannelId = param.PrivateChannelId;
                 model.NijiBotChannelId = param.NijiBotChannelId;
                 model.UserAgent = param.UserAgent;
@@ -981,7 +989,7 @@ namespace Midjourney.API
 
                 DbHelper.Instance.AccountStore.Update(model);
 
-                var disInstance = _discordLoadBalancer.GetDiscordInstance(model.ChannelId);
+                var disInstance = _discordLoadBalancer.GetDiscordInstance(model.GuildId);
                 disInstance?.ClearAccountCache(model.Id);
 
                 // 清除缓存
@@ -1014,7 +1022,7 @@ namespace Midjourney.API
             try
             {
                 // 如果正在执行则释放
-                var disInstance = _discordLoadBalancer.GetDiscordInstance(account.ChannelId);
+                var disInstance = _discordLoadBalancer.GetDiscordInstance(account.GuildId);
                 if (disInstance != null)
                 {
                     _discordLoadBalancer.RemoveInstance(disInstance);
