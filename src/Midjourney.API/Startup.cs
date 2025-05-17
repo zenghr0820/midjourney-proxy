@@ -6,13 +6,11 @@ global using Midjourney.Infrastructure.Models;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.OpenApi.Models;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Options;
-using Midjourney.Infrastructure.Wss;
-using Midjourney.Infrastructure.Wss.Handle;
+using Midjourney.Infrastructure.Services;
 using Serilog;
 
 namespace Midjourney.API
@@ -167,6 +165,9 @@ namespace Midjourney.API
             services.AddSingleton<DiscordAccountInitializer>();
             services.AddHostedService(provider => provider.GetRequiredService<DiscordAccountInitializer>());
 
+            // 注册任务清理服务
+            services.AddHostedService<TaskCleanupService>();
+            
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             services.AddEndpointsApiExplorer();
             services.AddSwaggerGen(c =>

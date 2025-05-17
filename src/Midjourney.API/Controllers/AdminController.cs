@@ -805,7 +805,7 @@ namespace Midjourney.API.Controllers
             {
                 throw new LogicException("该服务器已存在账号");
             }
-            
+
             if (accountConfig.UseBotWss && string.IsNullOrWhiteSpace(accountConfig.BotToken))
             {
                 return Result.Fail("启动Bot Wss时，BotToken 必须有值");
@@ -975,7 +975,7 @@ namespace Midjourney.API.Controllers
             {
                 return Result.Fail("禁止修改频道 ID 和服务器 ID");
             }
-            
+
             // 启动 Bot Token 时，botToken 必须有值
             if (param.UseBotWss && string.IsNullOrWhiteSpace(param.BotToken))
             {
@@ -1113,7 +1113,7 @@ namespace Midjourney.API.Controllers
 
             var streamQ = DbHelper.Instance.AccountStore.StreamQuery();
 
-            var query =  DbHelper.Instance.AccountStore.StreamQuery()
+            var query = DbHelper.Instance.AccountStore.StreamQuery()
                     .WhereIf(!string.IsNullOrWhiteSpace(param.GuildId), c => c.GuildId == param.GuildId)
                     .WhereIf(!string.IsNullOrWhiteSpace(param.ChannelId), c => c.ChannelId == param.ChannelId)
                     .WhereIf(param.Enable.HasValue, c => c.Enable == param.Enable)
@@ -1204,7 +1204,7 @@ namespace Midjourney.API.Controllers
             // 获取当前用户
             var user = _workContext.GetUser();
             var userId = user?.Id ?? "";
-
+            
             var param = request.Search;
 
             var sq = DbHelper.Instance.TaskStore.StreamQuery();
@@ -1213,10 +1213,10 @@ namespace Midjourney.API.Controllers
                     .WhereIf(!string.IsNullOrWhiteSpace(param.InstanceId), c => c.InstanceId == param.InstanceId)
                     .WhereIf(param.Status.HasValue, c => c.Status == param.Status)
                     .WhereIf(param.Action.HasValue, c => c.Action == param.Action)
-                    .WhereIf(user?.Role != EUserRole.ADMIN, c => c.UserId == userId)
                     .WhereIf(!string.IsNullOrWhiteSpace(param.FailReason), c => c.FailReason.Contains(param.FailReason))
                     .WhereIf(!string.IsNullOrWhiteSpace(param.Description), c => c.Description.Contains(param.Description) || c.Prompt.Contains(param.Description) || c.PromptEn.Contains(param.Description));
 
+            query = user != null ? query.WhereIf(user.Role != EUserRole.ADMIN, c => c.UserId == userId) : query.WhereIf(true, c => c.UserId == null);
 
             var count = query.Count();
 

@@ -69,12 +69,19 @@ namespace Midjourney.Infrastructure.Wss
             {
                 return;
             }
+            
+            // 获取 content
+            if (data.TryGetProperty("content", out var contentEl))
+            {
+            }
 
             var gatewayMessage = raw.Deserialize<DiscordSocketMessage>();
             var type = gatewayMessage.Type;
             var opCode = gatewayMessage.OperationCode;
-
+#if DEBUG
             _logger.Debug("Received [{0}] Gateway Event => {@1}", type, data.ToString());
+#endif
+            _logger.Debug("Received [{0}] Gateway Event => {@1}", type, contentEl.ToString());
 
             // 创建MessageWrapper
             MessageWrapper message = new MessageWrapper(data);
