@@ -34,6 +34,9 @@ namespace Midjourney.Infrastructure.Wss
         /// </summary>
         public const int CLOSE_CODE_EXCEPTION = 1011;
 
+        private const int ReceiveChunkSize = 16 * 1024; // 16KB
+        private const int SendChunkSize = 4 * 1024; // 4KB
+
         private readonly ILogger _logger;
         private readonly DiscordHelper _discordHelper;
         private readonly WebProxy _webProxy;
@@ -283,25 +286,6 @@ namespace Midjourney.Infrastructure.Wss
         }
 
         /// <summary>
-        ///  订阅Ready事件触发 
-        /// </summary>
-        /// <param name="readyEvent"></param>
-        private void OnReady(DiscordReadyEvent readyEvent)
-        {
-            _resumeGatewayUrl = readyEvent.ResumeGatewayUrl;
-            _sessionId = readyEvent.SessionId;
-            OnSocketSuccess();
-        }
-
-        /// <summary>
-        /// 订阅Resumed事件触发
-        /// </summary>
-        private void OnResumed()
-        {
-            OnSocketSuccess();
-        }
-
-        /// <summary>
         /// 发送身份验证消息
         /// </summary>
         /// <returns>发送任务</returns>
@@ -363,6 +347,7 @@ namespace Midjourney.Infrastructure.Wss
         private async Task ReceiveMessagesAsync(CancellationToken cancellationToken)
         {
             const int MaxMessageSize = 1024 * 1024 * 10; // 10MB
+
             try
             {
                 if (WebSocket == null || WebSocket.State != WebSocketState.Open)
@@ -371,10 +356,9 @@ namespace Midjourney.Infrastructure.Wss
                     return;
                 }
 
-                var buffer = new byte[1024 * 4];
+                var buffer = new byte[ReceiveChunkSize];
 
-                while (!cancellationToken.IsCancellationRequested &&
-               WebSocket?.State == WebSocketState.Open)
+                while (!cancellationToken.IsCancellationRequested)
                 {
                     WebSocketReceiveResult result;
 
@@ -385,7 +369,7 @@ namespace Midjourney.Infrastructure.Wss
                             // 设置接收超时保护
                             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(60)); // 60秒超时
                             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-                            
+
                             // 接收单条消息的所有分片
                             do
                             {
@@ -405,7 +389,7 @@ namespace Midjourney.Infrastructure.Wss
                                     return;
                                 }
                             } while (!result.EndOfMessage);
-                            
+
                             // 处理完整消息
                             ms.Seek(0, SeekOrigin.Begin);
                             switch (result.MessageType)
@@ -976,7 +960,12 @@ namespace Midjourney.Infrastructure.Wss
                     {
                         _logger.Warning(e, "新连接失败, 第 {@0} 次, {@1}", i, Account.ChannelId);
 
-                        Thread.Sleep(_config.ReconnectDelay);
+                        // 使用指数退避 计算等待时间
+                        int waitTime = (int)Math.Min(
+                            _config.ReconnectDelay * Math.Pow(1.5, i - 1),
+                            TimeSpan.FromMinutes(2).TotalMilliseconds);
+
+                        Thread.Sleep(waitTime);
                     }
                 }
 
@@ -1110,7 +1099,7 @@ namespace Midjourney.Infrastructure.Wss
                     if (_receiveTask != null)
                     {
                         LogInfo("强制释放消息 task");
-                        
+
                         // 等待接收任务完成，最多等待2秒
                         if (!_receiveTask.IsCompleted && !_receiveTask.IsCanceled && !_receiveTask.IsFaulted)
                         {
@@ -1119,7 +1108,7 @@ namespace Midjourney.Infrastructure.Wss
                                 _logger.Warning("接收任务等待超时");
                             }
                         }
-                        
+
                         _receiveTask?.Dispose();
                         _receiveTask = null;
                     }
@@ -1175,7 +1164,7 @@ namespace Midjourney.Infrastructure.Wss
                             LogInfo("WebSocket不处于可关闭状态，执行强制中止");
                             WebSocket.Abort();
                         }
-                        
+
                         // 释放资源
                         WebSocket.Dispose();
                         WebSocket = null;
