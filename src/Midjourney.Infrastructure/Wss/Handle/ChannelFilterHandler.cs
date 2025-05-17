@@ -47,7 +47,7 @@ public class ChannelFilterHandler : BaseMessageHandler
         if (!isPrivareChannel && !instance.AllChannelIds.Contains(cid)
             && !account.SubChannelValues.ContainsKey(cid))
         {
-            Log.Debug("当前服务器：{0}, 匹配不到频道ID: {1}, 已忽略该数据 - {2}", instance.GuildId, cid, message.Id);
+            Log.Information("当前服务器：{0}, 匹配不到频道ID: {1}, 已忽略该数据 - {2}", instance.GuildId, cid, message.Id);
             // 标记消息已处理
             message.HasHandle = true;
             return;

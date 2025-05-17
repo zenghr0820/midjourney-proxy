@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Util;
-using Midjourney.Infrastructure.Wss.Gateway;
 using Serilog;
 
 namespace Midjourney.Infrastructure.LoadBalancer
@@ -17,7 +16,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         private readonly DiscordInstance _instance;
         private readonly IChannelSelectionStrategy _selectionStrategy;
 
-        private CancellationTokenSource _longToken;
+        private readonly CancellationTokenSource _longToken;
 
         private readonly DiscordAccount _account;
 
