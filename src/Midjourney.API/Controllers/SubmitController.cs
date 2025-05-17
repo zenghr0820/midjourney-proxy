@@ -818,7 +818,7 @@ namespace Midjourney.API.Controllers
                 if (user.DayDrawLimit > 0)
                 {
                     var userTodayDrawCount = (int)DbHelper.Instance.TaskStore.Count(x => x.SubmitTime >= nowDate && x.UserId == user.Id);
-                    if (userTodayDrawCount > user.DayDrawLimit)
+                    if (userTodayDrawCount >= user.DayDrawLimit)
                     {
                         throw new LogicException("用户今日绘图次数已达上限");
                     }
@@ -827,7 +827,7 @@ namespace Midjourney.API.Controllers
                 if (user.TotalDrawLimit > 0)
                 {
                     var userTotalDrawCount = (int)DbHelper.Instance.TaskStore.Count(x => x.UserId == user.Id);
-                    if (userTotalDrawCount > user.TotalDrawLimit)
+                    if (userTotalDrawCount >= user.TotalDrawLimit)
                     {
                         throw new LogicException("总绘图次数已达上限");
                     }
@@ -868,7 +868,7 @@ namespace Midjourney.API.Controllers
                 {
                     var userDrawCount = (int)DbHelper.Instance.TaskStore
                         .Count(x => x.SubmitTime >= nowDate && x.UserId == user.Id && x.Status == TaskStatus.IN_PROGRESS);
-                    if (userDrawCount > user.CoreSize)
+                    if (userDrawCount >= user.CoreSize)
                     {
                         throw new LogicException("并发数已达上限");
                     }
@@ -879,7 +879,7 @@ namespace Midjourney.API.Controllers
                 {
                     var userDrawCount = (int)DbHelper.Instance.TaskStore
                         .Count(x => x.SubmitTime >= nowDate && x.UserId == user.Id && (x.Status == TaskStatus.NOT_START || x.Status == TaskStatus.SUBMITTED));
-                    if (userDrawCount > user.QueueSize)
+                    if (userDrawCount >= user.QueueSize)
                     {
                         throw new LogicException("队列数已达上限");
                     }

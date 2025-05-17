@@ -236,6 +236,13 @@ namespace Midjourney.Infrastructure.Wss.Handle
                     _application = _eventData.Application;
                 }
             }
+
+            if (_application == null && _gatewayData.TryGetProperty("application_id", out var appIdElement))
+            {
+                PartialApplication app = new();
+                app.Id = appIdElement.GetString();
+                _application = app;
+            }
         }
 
         #endregion

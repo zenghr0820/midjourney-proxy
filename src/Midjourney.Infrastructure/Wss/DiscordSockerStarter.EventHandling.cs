@@ -76,6 +76,37 @@ namespace Midjourney.Infrastructure.Wss
 
             _logger.Debug("Received [{0}] Gateway Event => {@1}", type, data.ToString());
 
+            // 创建MessageWrapper
+            MessageWrapper message = new MessageWrapper(data);
+
+            // 创建处理器链
+            // Remix模式切换处理器
+            var remixHandler = new RemixModeHandler();
+            // 账号设置信息处理器
+            var settingsHandler = new SettingInfoHandler();
+            // 生成模式切换处理器
+            var modeHandler = new GenerationModeHandler();
+            // 频道过滤处理器
+            var channelHandler = new ChannelFilterHandler();
+            // 随机数处理器
+            var nonceHandler = new NonceHandler();
+
+            // 组装处理器链
+            remixHandler
+                .SetNext(settingsHandler)
+                .SetNext(modeHandler)
+                .SetNext(channelHandler)
+                .SetNext(nonceHandler);
+
+            // 开始处理
+            remixHandler.Handle(_discordInstance, (MessageType)messageType, message);
+
+            // 如果消息已经处理过，则跳过
+            if (message.HasHandle == true)
+            {
+                return;
+            }
+
             try
             {
                 switch (type)
@@ -174,44 +205,6 @@ namespace Midjourney.Infrastructure.Wss
                         break;
                     #endregion
                     default:
-                        // 内容
-                        var contentStr = string.Empty;
-                        if (data.TryGetProperty("content", out JsonElement content))
-                        {
-                            contentStr = content.GetString();
-                        }
-
-                        // 创建MessageWrapper
-                        MessageWrapper message = new MessageWrapper(data);
-
-                        // 创建处理器链
-                        // Remix模式切换处理器
-                        var remixHandler = new RemixModeHandler();
-                        // 账号设置信息处理器
-                        var settingsHandler = new SettingInfoHandler();
-                        // 生成模式切换处理器
-                        var modeHandler = new GenerationModeHandler();
-                        // 频道过滤处理器
-                        var channelHandler = new ChannelFilterHandler();
-                        // 随机数处理器
-                        var nonceHandler = new NonceHandler();
-
-                        // 组装处理器链
-                        remixHandler
-                            .SetNext(settingsHandler)
-                            .SetNext(modeHandler)
-                            .SetNext(channelHandler)
-                            .SetNext(nonceHandler);
-
-                        // 开始处理
-                        remixHandler.Handle(_discordInstance, (MessageType)messageType, message);
-
-                        // 如果消息已经处理过，则跳过
-                        if (message.HasHandle == true)
-                        {
-                            return;
-                        }
-
                         var eventData = message.EventData;
 
                         // 如果消息类型是 CREATE

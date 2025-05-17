@@ -311,7 +311,8 @@ namespace Midjourney.Infrastructure.Wss
             var identifyMessage = new { op = 2, d = authData };
             await SendMessageAsync(identifyMessage);
 
-            _logger.Information("已发送 IDENTIFY 消息 {@0}", identifyMessage.ToString());
+            _logger.Information("已发送 IDENTIFY 消息 {@0}", Account.GetDisplay());
+            _logger.Debug(identifyMessage.ToString() ?? string.Empty);
         }
 
         /// <summary>
@@ -637,7 +638,7 @@ namespace Midjourney.Infrastructure.Wss
                 token = GetPrefixedToken()
             };
 
-            _logger.Information("创建授权信息 {@0}", authData.token);
+            _logger.Debug("创建授权信息 {@0}", authData.token);
 
             return JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(authData));
         }
@@ -731,7 +732,7 @@ namespace Midjourney.Infrastructure.Wss
 
                     case GatewayOpCode.Dispatch:
                         {
-                            _logger.Information("Received Dispatch {@0}, {@1}", type, Account.GuildId);
+                            _logger.Information("Received Dispatch {@0}", type);
                             await HandleDispatch(payload);
                         }
                         break;

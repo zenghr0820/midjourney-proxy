@@ -825,6 +825,8 @@ namespace Midjourney.Infrastructure.Services
                 {
                     return res;
                 }
+                
+                string taskId = task.Id;
 
                 // 等待获取 messageId 和交互消息 id
                 // 等待最大超时 5min
@@ -835,6 +837,12 @@ namespace Midjourney.Infrastructure.Services
                     // 等待 2.5s
                     Thread.Sleep(2500);
                     task = discordInstance.GetRunningTask(task.Id);
+                    // 如果任务为空，可能是被取消呢
+                    if (task == null)
+                    {
+                        Log.Information("执行 Modal 任务, 运行队列中没有找到该任务{0}", taskId);
+                        return Message.Of(ReturnCode.NOT_FOUND, "Task not found");
+                    }
 
                     if (string.IsNullOrWhiteSpace(task.RemixModalMessageId) || string.IsNullOrWhiteSpace(task.InteractionMetadataId))
                     {

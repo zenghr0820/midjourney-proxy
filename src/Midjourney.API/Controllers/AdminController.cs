@@ -1033,6 +1033,7 @@ namespace Midjourney.API.Controllers
         /// </summary>
         /// <returns>所有Discord账号信息</returns>
         [HttpGet("accounts")]
+        [AllowAnonymous]
         public ActionResult<List<DiscordAccount>> List()
         {
             var user = _workContext.GetUser();

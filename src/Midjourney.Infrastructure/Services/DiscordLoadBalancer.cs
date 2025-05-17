@@ -60,8 +60,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
             if (!string.IsNullOrWhiteSpace(channelId))
             {
                 var instanceWithChannel = GetAliveInstances()
-                    .Where(instance => instance.AllChannelIds.Contains(channelId))
-                    .FirstOrDefault();
+                    .FirstOrDefault(instance => instance.AllChannelIds.Contains(channelId));
 
                 if (instanceWithChannel != null)
                 {
@@ -198,76 +197,74 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
                 return model;
             }
-            else
-            {
-                var list = GetAliveInstances()
 
-                    // 过滤有空闲队列的实例
-                    .Where(c => c.IsIdleQueue(channelId))
+            var list = GetAliveInstances()
 
-                    // 允许继续绘图
-                    .Where(c => c.Account.IsContinueDrawing)
+                // 过滤有空闲队列的实例
+                .Where(c => c.IsIdleQueue(channelId))
 
-                    // 指定速度模式过滤
-                    .WhereIf(accountFilter?.Modes.Count > 0, c => c.Account.Mode == null || accountFilter.Modes.Contains(c.Account.Mode.Value))
+                // 允许继续绘图
+                .Where(c => c.Account.IsContinueDrawing)
 
-                    // 允许速度模式过滤
-                    // 或者有交集的
-                    .WhereIf(accountFilter?.Modes.Count > 0, c => c.Account.AllowModes == null || c.Account.AllowModes.Count <= 0 || c.Account.AllowModes.Any(x => accountFilter.Modes.Contains(x)))
+                // 指定速度模式过滤
+                .WhereIf(accountFilter?.Modes.Count > 0, c => c.Account.Mode == null || accountFilter.Modes.Contains(c.Account.Mode.Value))
 
-                    // 如果速度模式中，包含快速模式，则过滤掉不支持快速模式的实例
-                    .WhereIf(accountFilter?.Modes.Contains(GenerationSpeedMode.FAST) == true ||
-                    accountFilter?.Modes.Contains(GenerationSpeedMode.TURBO) == true,
+                // 允许速度模式过滤
+                // 或者有交集的
+                .WhereIf(accountFilter?.Modes.Count > 0, c => c.Account.AllowModes == null || c.Account.AllowModes.Count <= 0 || c.Account.AllowModes.Any(x => accountFilter.Modes.Contains(x)))
+
+                // 如果速度模式中，包含快速模式，则过滤掉不支持快速模式的实例
+                .WhereIf(accountFilter?.Modes.Contains(GenerationSpeedMode.FAST) == true ||
+                         accountFilter?.Modes.Contains(GenerationSpeedMode.TURBO) == true,
                     c => c.Account.FastExhausted == false)
 
-                    // Midjourney Remix 过滤
-                    .WhereIf(accountFilter?.Remix == true, c => c.Account.MjRemixOn == accountFilter.Remix || !c.Account.RemixAutoSubmit)
-                    .WhereIf(accountFilter?.Remix == false, c => c.Account.MjRemixOn == accountFilter.Remix)
+                // Midjourney Remix 过滤
+                .WhereIf(accountFilter?.Remix == true, c => c.Account.MjRemixOn == accountFilter.Remix || !c.Account.RemixAutoSubmit)
+                .WhereIf(accountFilter?.Remix == false, c => c.Account.MjRemixOn == accountFilter.Remix)
 
-                    // Niji Remix 过滤
-                    .WhereIf(accountFilter?.NijiRemix == true, c => c.Account.NijiRemixOn == accountFilter.NijiRemix || !c.Account.RemixAutoSubmit)
-                    .WhereIf(accountFilter?.NijiRemix == false, c => c.Account.NijiRemixOn == accountFilter.NijiRemix)
+                // Niji Remix 过滤
+                .WhereIf(accountFilter?.NijiRemix == true, c => c.Account.NijiRemixOn == accountFilter.NijiRemix || !c.Account.RemixAutoSubmit)
+                .WhereIf(accountFilter?.NijiRemix == false, c => c.Account.NijiRemixOn == accountFilter.NijiRemix)
 
-                    // Remix 自动提交过滤
-                    .WhereIf(accountFilter?.RemixAutoConsidered.HasValue == true, c => c.Account.RemixAutoSubmit == accountFilter.RemixAutoConsidered)
+                // Remix 自动提交过滤
+                .WhereIf(accountFilter?.RemixAutoConsidered.HasValue == true, c => c.Account.RemixAutoSubmit == accountFilter.RemixAutoConsidered)
 
-                    // 过滤只接收新任务的实例
-                    .WhereIf(isNewTask == true, c => c.Account.IsAcceptNewTask == true)
+                // 过滤只接收新任务的实例
+                .WhereIf(isNewTask == true, c => c.Account.IsAcceptNewTask == true)
 
-                    // 过滤开启 niji mj 的账号
-                    .WhereIf(botType == EBotType.NIJI_JOURNEY, c => c.Account.EnableNiji == true)
-                    .WhereIf(botType == EBotType.MID_JOURNEY, c => c.Account.EnableMj == true)
+                // 过滤开启 niji mj 的账号
+                .WhereIf(botType == EBotType.NIJI_JOURNEY, c => c.Account.EnableNiji == true)
+                .WhereIf(botType == EBotType.MID_JOURNEY, c => c.Account.EnableMj == true)
 
-                    // 过滤开启功能的账号
-                    .WhereIf(blend == true, c => c.Account.IsBlend)
-                    .WhereIf(describe == true, c => c.Account.IsDescribe)
-                    .WhereIf(shorten == true, c => c.Account.IsShorten)
+                // 过滤开启功能的账号
+                .WhereIf(blend == true, c => c.Account.IsBlend)
+                .WhereIf(describe == true, c => c.Account.IsDescribe)
+                .WhereIf(shorten == true, c => c.Account.IsShorten)
 
-                    // 领域过滤
-                    .WhereIf(isDomain == true && domainIds?.Count > 0, c => c.Account.IsVerticalDomain && c.Account.VerticalDomainIds.Any(x => domainIds.Contains(x)))
-                    .WhereIf(isDomain == false, c => c.Account.IsVerticalDomain != true)
+                // 领域过滤
+                .WhereIf(isDomain == true && domainIds?.Count > 0, c => c.Account.IsVerticalDomain && c.Account.VerticalDomainIds.Any(x => domainIds.Contains(x)))
+                .WhereIf(isDomain == false, c => c.Account.IsVerticalDomain != true)
 
-                    // 过滤指定账号
-                    .WhereIf(ids?.Count > 0, c =>
+                // 过滤指定账号
+                .WhereIf(ids?.Count > 0, c =>
+                {
+                    var isContains = false;
+                    foreach (var cId in c.AllChannelIds)
                     {
-                        var isContains = false;
-                        foreach (var cId in c.AllChannelIds)
+                        if (ids.Contains(cId))
                         {
-                            if (ids.Contains(cId))
-                            {
-                                isContains = true;
-                                break;
-                            }
+                            isContains = true;
+                            break;
                         }
-                        return isContains;
-                    })
+                    }
+                    return isContains;
+                })
 
-                    // 如果指定了频道ID，则过滤包含该频道的实例
-                    .WhereIf(!string.IsNullOrWhiteSpace(channelId), c => c.AllChannelIds.Contains(channelId))
-                    .ToList();
+                // 如果指定了频道ID，则过滤包含该频道的实例
+                .WhereIf(!string.IsNullOrWhiteSpace(channelId), c => c.AllChannelIds.Contains(channelId))
+                .ToList();
 
-                return _rule.Choose(list);
-            }
+            return _rule.Choose(list);
         }
 
         /// <summary>

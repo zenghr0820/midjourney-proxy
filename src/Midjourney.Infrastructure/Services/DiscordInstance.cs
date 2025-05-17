@@ -1595,7 +1595,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
                         ["files"] = new JArray { fileObj }
                     };
 
-                    var discordAttachmentUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channelId}/attachments";
+                    var discordAttachmentUrl = $"{_discordHelper.GetServer()}/api/v9/channels/{channel.ChannelId}/attachments";
                     HttpResponseMessage response = await PostJsonAsync(discordAttachmentUrl, paramsJson.ToString());
                     if (response.StatusCode != System.Net.HttpStatusCode.OK)
                     {

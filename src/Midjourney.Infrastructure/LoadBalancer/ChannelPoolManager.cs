@@ -658,6 +658,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     return;
                 }
 
+                // 执行实际的任务提交方法
                 var result = await discordSubmit();
 
                 // 检查取消令牌
@@ -730,20 +731,20 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     // 成功才都消息
                     if (info.Status == TaskStatus.SUCCESS)
                     {
-                        var res = await _instance.ReadMessageAsync(info.MessageId);
+                        var res = await _instance.ReadMessageAsync(info.MessageId, info.ChannelId);
                         if (res.Code == ReturnCode.SUCCESS)
                         {
-                            _logger.Debug("自动读消息成功 {@0} - {@1}", info.InstanceId, info.Id);
+                            _logger.Debug("自动读消息成功 {@0} - {@1}", info.ChannelId, info.Id);
                         }
                         else
                         {
-                            _logger.Warning("自动读消息失败 {@0} - {@1}", info.InstanceId, info.Id);
+                            _logger.Warning("自动读消息失败 {@0} - {@1}", info.ChannelId, info.Id);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.Error(ex, "自动读消息异常 {@0} - {@1}", info.InstanceId, info.Id);
+                    _logger.Error(ex, "自动读消息异常 {@0} - {@1}", info.ChannelId, info.Id);
                 }
 
                 // 任务完成后，检查是否需要自动删除消息
@@ -759,22 +760,22 @@ namespace Midjourney.Infrastructure.LoadBalancer
                         await Task.Delay(1000, cts.Token);
 
                         // 使用DeleteMessageAsync方法删除消息
-                        var deleteResult = await _instance.DeleteMessageAsync(info.MessageId);
+                        var deleteResult = await _instance.DeleteMessageAsync(info.MessageId, info.ChannelId);
                         if (deleteResult.Code == ReturnCode.SUCCESS)
                         {
-                            _logger.Information("自动删除消息成功 InstanceId: {@0} - TaskId: {@1} - MessageId: {@2}",
-                                info.InstanceId, info.Id, info.MessageId);
+                            _logger.Information("自动删除消息成功 ChannelId: {@0} - TaskId: {@1} - MessageId: {@2}",
+                                info.ChannelId, info.Id, info.MessageId);
                         }
                         else
                         {
-                            _logger.Warning("自动删除消息失败 InstanceId: {@0} - TaskId: {@1} - MessageId: {@2}: {3}",
-                                info.InstanceId, info.Id, info.MessageId, deleteResult.Description);
+                            _logger.Warning("自动删除消息失败 ChannelId: {@0} - TaskId: {@1} - MessageId: {@2}: {3}",
+                                info.ChannelId, info.Id, info.MessageId, deleteResult.Description);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.Error(ex, "自动删除消息异常 InstanceId: {@0} - TaskId: {@1} - MessageId: {@2}", info.InstanceId, info.Id, info.MessageId);
+                    _logger.Error(ex, "自动删除消息异常 ChannelId: {@0} - TaskId: {@1} - MessageId: {@2}", info.ChannelId, info.Id, info.MessageId);
                 }
 
                 _logger.Debug("[{AccountDisplay}] task finished, id: {TaskId}, status: {TaskStatus}", info.ChannelId, info.Id, info.Status);

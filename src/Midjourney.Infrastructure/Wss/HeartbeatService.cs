@@ -138,7 +138,7 @@ namespace Midjourney.Infrastructure.Wss
                 var rtt = _lastAckTime - _lastHeartbeatTime;
                 if (rtt > 0 && rtt < 60000) // 防止时间回绕导致的异常值
                 {
-                    _logger.Debug("心跳往返时间：{0}ms", rtt);
+                    _logger.Information("心跳往返时间：{0}ms", rtt);
                 }
             }
         }
@@ -195,7 +195,7 @@ namespace Midjourney.Infrastructure.Wss
                     {
                         await _sendHeartbeatAsync();
                         MarkHeartbeatSent();
-                        _logger.Debug("已发送心跳。");
+                        _logger.Information("已发送心跳");
                     }
                     catch (Exception ex)
                     {
