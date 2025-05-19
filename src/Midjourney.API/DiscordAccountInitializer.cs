@@ -670,7 +670,7 @@ namespace Midjourney.API
                             try
                             {
                                 // 启动后执行 info setting 操作
-                                // await _taskService.InfoSetting(account.Id);
+                                await _taskService.InfoSetting(account.Id);
                             }
                             catch (Exception ex)
                             {
