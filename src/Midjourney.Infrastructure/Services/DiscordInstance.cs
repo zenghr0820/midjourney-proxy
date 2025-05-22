@@ -992,7 +992,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// </summary>
         private async Task<HttpResponseMessage> PostJsonAsync(string url, string paramsStr)
         {
-            _logger.Debug("PostJsonAsync url = {@0}, paramsStr = {@1}", url, paramsStr);
+            _logger.Information("PostJsonAsync url = {@0}, paramsStr = {@1}", url, paramsStr);
             HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = new StringContent(paramsStr, Encoding.UTF8, "application/json")

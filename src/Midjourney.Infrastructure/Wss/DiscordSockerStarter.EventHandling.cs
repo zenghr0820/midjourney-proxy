@@ -79,9 +79,9 @@ namespace Midjourney.Infrastructure.Wss
             var type = gatewayMessage.Type;
             var opCode = gatewayMessage.OperationCode;
 #if DEBUG
-            _logger.Debug("Received [{0}] Gateway Event => {@1}", type, data.ToString());
+            _logger.Information("Received [{0}] Gateway Event => {@1}", type, data.ToString());
 #endif
-            _logger.Debug("Received [{0}] Gateway Event => {@1}", type, contentEl.ToString());
+            _logger.Information("Received [{0}] Gateway Event => {@1}", type, contentEl.ToString());
 
             // 创建MessageWrapper
             MessageWrapper message = new MessageWrapper(data);
