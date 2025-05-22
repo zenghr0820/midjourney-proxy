@@ -59,12 +59,8 @@ public class ChannelFilterHandler : BaseMessageHandler
         // 处理私信频道
         if (isPrivareChannel)
         {
-            if (messageType == MessageType.CREATE && string.IsNullOrWhiteSpace(message.Id))
-            {
-                ProcessPrivateChannelMessage(instance, message);
-            }
+            ProcessPrivateChannelMessage(instance, message);
             message.HasHandle = true;
-            return;
         }
 
     }
@@ -98,7 +94,9 @@ public class ChannelFilterHandler : BaseMessageHandler
             // 如果Job ID和seed不为空，则更新任务的seed
             if (!string.IsNullOrWhiteSpace(jobId) && !string.IsNullOrWhiteSpace(seed))
             {
-                var task = instance.FindRunningTask(c => c.GetProperty<string>(Constants.TASK_PROPERTY_MESSAGE_HASH, default) == jobId).FirstOrDefault();
+                // 根据 jobId 查找任务，更新任务的seed
+                // var task = instance.FindRunningTask(c => c.GetProperty<string>(Constants.TASK_PROPERTY_MESSAGE_HASH, default) == jobId).FirstOrDefault();
+                var task = DbHelper.Instance.TaskStore.Where(t => t.JobId == jobId).FirstOrDefault();
                 if (task != null)
                 {
                     if (!task.MessageIds.Contains(id))
@@ -107,12 +105,13 @@ public class ChannelFilterHandler : BaseMessageHandler
                     }
 
                     task.Seed = seed;
+                    DbHelper.Instance.TaskStore.Update("Seed", task);
                 }
             }
         }
         else
         {
-            // 处理Seed信息
+            // 处理附件信息
             ProcessAttachments(instance, message);
         }
 
