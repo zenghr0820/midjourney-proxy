@@ -99,6 +99,6 @@ public class DiscordChannelDto
     [JsonPropertyName("default_forum_layout")]
     public JsonElement DefaultForumLayout { get; set; }
 
-    [JsonPropertyName("recipients_ids")]
+    [JsonPropertyName("recipient_ids")]
     public string[] RecipientsIds { get; set; }
 }
