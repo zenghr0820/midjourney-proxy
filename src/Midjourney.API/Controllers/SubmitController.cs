@@ -1,12 +1,11 @@
-﻿
-
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.LoadBalancer;
 using Midjourney.Infrastructure.Services;
 using Midjourney.Infrastructure.Util;
+using Serilog;
 using System.Net;
 using System.Text.RegularExpressions;
 
@@ -654,8 +653,77 @@ namespace Midjourney.API.Controllers
                 return NotFound(SubmitResultVO.Fail(ReturnCode.NOT_FOUND, "关联任务不存在或已失效"));
             }
 
-            var prompt = actionDTO.Prompt;
             var task = targetTask;
+
+            // 如果是成功状态的父任务，检查是否存在子任务，没有则创建
+            if (targetTask.Status == TaskStatus.SUCCESS)
+            {
+                // 兼容旧版本，局部重绘没有执行 action 动作，直接提交 modal，所以taskId是父任务id
+                // 查找是否存在子任务
+                var subTask = DbHelper.Instance.TaskStore.Where(x => x.ParentId == actionDTO.TaskId && x.Status == TaskStatus.MODAL).FirstOrDefault();
+
+                if (subTask != null)
+                {
+                    // 有子任务，直接使用已存在的子任务
+                    task = subTask;
+                }
+                // 只有当是局部重绘请求（MaskBase64有值）时才创建新任务
+                else if (!string.IsNullOrWhiteSpace(actionDTO.MaskBase64))
+                {
+                    // 从父任务的按钮中获取局部重绘的CustomId (MJ::Inpaint::)
+                    var inpaintButton = targetTask.Buttons.FirstOrDefault(x =>
+                        x.CustomId != null && x.CustomId.StartsWith("MJ::Inpaint::"));
+
+                    if (inpaintButton != null)
+                    {
+                        // 创建新的 ActionDTO 用于创建任务
+                        // 必须使用 SubmitActionDTO，因为 NewTask 方法需要 BaseSubmitDTO 类型参数
+                        // 且 SubmitActionDTO 包含 CustomId 属性
+                        var submitAction = new SubmitActionDTO
+                        {
+                            TaskId = actionDTO.TaskId,
+                            CustomId = inpaintButton.CustomId, // 使用找到的局部重绘按钮 CustomId
+                            State = actionDTO.State
+                        };
+
+                        // 创建新任务
+                        var newTask = NewTask(submitAction);
+
+                        // 设置任务属性，复用action接口的代码
+                        newTask.InstanceId = targetTask.InstanceId;
+                        newTask.ChannelId = targetTask.ChannelId;
+                        newTask.ParentId = targetTask.Id;
+                        newTask.BotType = targetTask.BotType;
+                        newTask.RealBotType = targetTask.RealBotType;
+                        newTask.SubInstanceId = targetTask.SubInstanceId;
+                        newTask.Action = TaskAction.INPAINT; // 设置为局部重绘动作
+                        //  提交局部重绘 INPAINT action 任务
+                        var res = _taskService.SubmitAction(newTask, submitAction);
+                        if (string.IsNullOrWhiteSpace(res.Result))
+                        {
+                            return res;
+                        }
+
+                        // 获取新的modal任务
+                        var modalTask = _taskStoreService.Get(res.Result);
+
+                        // 更新任务引用，使用新创建的任务继续处理
+                        task = modalTask;
+                    }
+                    else
+                    {
+                        // 没有找到局部重绘按钮
+                        return Ok(SubmitResultVO.Fail(ReturnCode.VALIDATION_ERROR, "关联任务状态错误，需要执行Action操作"));
+                    }
+                }
+                else
+                {
+                    // 不是局部重绘请求，但任务状态是SUCCESS
+                    return Ok(SubmitResultVO.Fail(ReturnCode.VALIDATION_ERROR, "关联任务状态错误，需要执行Action操作"));
+                }
+            }
+
+            var prompt = actionDTO.Prompt;
 
             var promptEn = TranslatePrompt(prompt, task.RealBotType ?? task.BotType);
             try
