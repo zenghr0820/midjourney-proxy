@@ -1,5 +1,4 @@
-﻿
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 using Midjourney.Infrastructure.Wss.Gateway;
 
 namespace Midjourney.Infrastructure.Dto
@@ -109,7 +108,7 @@ namespace Midjourney.Infrastructure.Dto
         /// 消息 ID。
         /// </summary>
         [JsonPropertyName("id")]
-        public string Id { get; set; }
+        public new string Id { get; set; }
 
         /// <summary>
         /// 标志位。

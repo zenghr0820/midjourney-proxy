@@ -1,8 +1,5 @@
-﻿
-
-using Aliyun.OSS;
+﻿using Aliyun.OSS;
 using IdGen;
-using Microsoft.AspNetCore.Cors.Infrastructure;
 using Serilog;
 using System.Collections.Concurrent;
 using System.Text;
@@ -73,6 +70,8 @@ namespace Midjourney.Infrastructure.Storage
         /// <param name="originalFileName">原文件名，不可为空</param>
         /// <param name="pathPrefix">文件路径前缀</param>
         /// <param name="path">如果外部传递了 path 则使用此路径值作为 key，并且忽略 prefix 参数</param>
+        /// <param name="fileName"></param>
+        /// <param name="isDateKeyPrefix"></param>
         /// <returns></returns>
         private static string GetKey(string originalFileName, string pathPrefix = null, string path = null, string fileName = null, bool? isDateKeyPrefix = true)
         {
@@ -180,12 +179,16 @@ namespace Midjourney.Infrastructure.Storage
 
                     newKey = newKey.Trim().Trim('/');
 
-                    var client = new OssClient(_endpoint, _accessKeyId, _accessKeySecret);
-                    var deleteObjectResult = client.DeleteObject(_bucketName, newKey);
-                    if (deleteObjectResult?.HttpStatusCode != System.Net.HttpStatusCode.OK)
+                    // 使用Task.Run将同步操作包装成异步操作
+                    await Task.Run(() =>
                     {
-                        _logger.Warning("删除文件失败, {@deleteObjectResult}", deleteObjectResult);
-                    }
+                        var client = new OssClient(_endpoint, _accessKeyId, _accessKeySecret);
+                        var deleteObjectResult = client.DeleteObject(_bucketName, newKey);
+                        if (deleteObjectResult?.HttpStatusCode != System.Net.HttpStatusCode.OK)
+                        {
+                            _logger.Warning("删除文件失败, {@deleteObjectResult}", deleteObjectResult);
+                        }
+                    });
                 }
                 catch (Exception ex)
                 {
@@ -302,6 +305,7 @@ namespace Midjourney.Infrastructure.Storage
         /// </summary>
         /// <param name="mediaBinaryStream"></param>
         /// <param name="key"></param>
+        /// <param name="mimeType"></param>
         /// <exception cref="Exception"></exception>
         public void Overwrite(Stream mediaBinaryStream, string key, string mimeType)
         {

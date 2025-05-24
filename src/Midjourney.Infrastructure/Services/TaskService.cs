@@ -1503,7 +1503,7 @@ namespace Midjourney.Infrastructure.Services
         {
             var options = new RestClientOptions(dto.Host)
             {
-                MaxTimeout = -1,
+                Timeout = Timeout.InfiniteTimeSpan,
             };
             var client = new RestClient(options);
             var request = new RestRequest(path, Method.Post);

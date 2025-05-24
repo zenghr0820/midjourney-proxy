@@ -33,8 +33,7 @@ namespace Midjourney.Infrastructure.StandardTable
         /// </summary>
         /// <typeparam name="T"></typeparam>
         /// <param name="list"></param>
-        /// <param name="page"></param>
-        /// <param name="pageSize"></param>
+        /// <param name="pagination"></param>
         /// <param name="total"></param>
         /// <returns></returns>
         public static StandardTableResult<T> ToTableResult<T>(this IEnumerable<T> list, StandardTablePagination pagination, int total = 0) where T : class, new()
@@ -57,8 +56,7 @@ namespace Midjourney.Infrastructure.StandardTable
         /// </summary>
         /// <typeparam name="T"></typeparam>
         /// <param name="list"></param>
-        /// <param name="page"></param>
-        /// <param name="pageSize"></param>
+        /// <param name="param"></param>
         /// <param name="total"></param>
         /// <returns></returns>
         public static StandardTableResult<T> ToTableResult<T>(this IEnumerable<T> list, StandardTableParam param, int total = 0) where T : class, new()
@@ -76,7 +74,6 @@ namespace Midjourney.Infrastructure.StandardTable
         /// <summary>
         /// 转分页
         /// </summary>
-        /// <typeparam name="dynamic"></typeparam>
         /// <param name="list"></param>
         /// <param name="page"></param>
         /// <param name="pageSize"></param>
@@ -151,8 +148,9 @@ namespace Midjourney.Infrastructure.StandardTable
         /// <summary>
         /// 排序条件扩展
         /// </summary>
-        /// <typeparam name="T"></typeparam>
-        /// <param name="query"></param>
+        /// <typeparam name="TSource"></typeparam>
+        /// <typeparam name="TKey"></typeparam>
+        /// <param name="source"></param>
         /// <param name="condition"></param>
         /// <param name="predicate"></param>
         /// <returns></returns>
@@ -164,8 +162,9 @@ namespace Midjourney.Infrastructure.StandardTable
         /// <summary>
         /// 排序条件扩展
         /// </summary>
-        /// <typeparam name="T"></typeparam>
-        /// <param name="query"></param>
+        /// <typeparam name="TSource"></typeparam>
+        /// <typeparam name="TKey"></typeparam>
+        /// <param name="source"></param>
         /// <param name="condition"></param>
         /// <param name="predicate"></param>
         /// <returns></returns>

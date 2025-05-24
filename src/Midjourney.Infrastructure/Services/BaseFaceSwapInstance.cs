@@ -1,6 +1,4 @@
-﻿
-
-using Microsoft.Extensions.Caching.Memory;
+﻿using Microsoft.Extensions.Caching.Memory;
 using Midjourney.Infrastructure.Services;
 using Newtonsoft.Json;
 using RestSharp;
@@ -188,7 +186,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         {
             var options = new RestClientOptions()
             {
-                MaxTimeout = -1,
+                Timeout = Timeout.InfiniteTimeSpan,
             };
             var client = new RestClient(options);
             var request = new RestRequest("https://api.replicate.com/v1/files", Method.Post);
@@ -246,7 +244,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         {
             var options = new RestClientOptions()
             {
-                MaxTimeout = -1,
+                Timeout = Timeout.InfiniteTimeSpan,
             };
             var client = new RestClient(options);
             var request = new RestRequest("https://api.replicate.com/v1/predictions", Method.Post);
@@ -292,7 +290,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         {
             var options = new RestClientOptions()
             {
-                MaxTimeout = -1,
+                Timeout = Timeout.InfiniteTimeSpan,
             };
             var client = new RestClient(options);
             var request = new RestRequest("https://api.replicate.com/v1/predictions", Method.Post);

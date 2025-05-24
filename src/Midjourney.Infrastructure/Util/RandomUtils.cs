@@ -1,5 +1,4 @@
-﻿
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 
 namespace Midjourney.Infrastructure.Util
 {
@@ -19,19 +18,16 @@ namespace Midjourney.Infrastructure.Util
         {
             if (length < 1) throw new ArgumentException("Length must be greater than 0", nameof(length));
 
-            var randomString = new char[length];
-            using (var rng = new RNGCryptoServiceProvider())
-            {
-                var buffer = new byte[sizeof(uint)];
-                for (var i = 0; i < length; i++)
-                {
-                    rng.GetBytes(buffer);
-                    var num = BitConverter.ToUInt32(buffer, 0);
-                    randomString[i] = Characters[num % Characters.Length];
-                }
-            }
+            var bytes = new byte[length];
+            RandomNumberGenerator.Fill(bytes);
 
-            return new string(randomString);
+            return string.Create(length, bytes, (chars, state) =>
+            {
+                for (var i = 0; i < chars.Length; i++)
+                {
+                    chars[i] = Characters[state[i] % Characters.Length];
+                }
+            });
         }
 
         /// <summary>
@@ -43,19 +39,16 @@ namespace Midjourney.Infrastructure.Util
         {
             if (length < 1) throw new ArgumentException("Length must be greater than 0", nameof(length));
 
-            var randomNumbers = new char[length];
-            using (var rng = new RNGCryptoServiceProvider())
-            {
-                var buffer = new byte[sizeof(uint)];
-                for (var i = 0; i < length; i++)
-                {
-                    rng.GetBytes(buffer);
-                    var num = BitConverter.ToUInt32(buffer, 0);
-                    randomNumbers[i] = Characters[num % 10]; // Only use '0' - '9'
-                }
-            }
+            var bytes = new byte[length];
+            RandomNumberGenerator.Fill(bytes);
 
-            return new string(randomNumbers);
+            return string.Create(length, bytes, (chars, state) =>
+            {
+                for (var i = 0; i < chars.Length; i++)
+                {
+                    chars[i] = Characters[state[i] % 10]; // Only use '0' - '9'
+                }
+            });
         }
     }
 }

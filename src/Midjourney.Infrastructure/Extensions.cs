@@ -284,9 +284,6 @@ namespace Midjourney.Infrastructure
         /// </summary>
         /// <typeparam name="T">实体类型。</typeparam>
         /// <param name="dataHelper">数据助手接口。</param>
-        /// <param name="orderBy">排序字段表达式。</param>
-        /// <param name="orderByAsc">是否升序排序。</param>
-        /// <param name="limit">返回的最大记录数。</param>
         /// <param name="filters">一组条件表达式及其对应的布尔值。</param>
         /// <returns>满足条件的实体列表。</returns>
         public static List<T> WhereIf<T>(this IDataHelper<T> dataHelper, params (bool condition, Expression<Func<T, bool>> filter)[] filters) where T : IBaseId

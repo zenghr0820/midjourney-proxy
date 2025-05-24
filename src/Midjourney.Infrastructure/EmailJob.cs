@@ -1,7 +1,4 @@
-﻿
-using Serilog;
-using System.Net;
-using System.Net.Mail;
+﻿using Serilog;
 
 namespace Midjourney.Infrastructure
 {
@@ -40,30 +37,6 @@ namespace Midjourney.Infrastructure
 
                 // 调用邮件发送方法
                 EmailSender.SendMimeKitEmail(smtpServer, userName, password, fromName, fromEmail, mailTo, subject, body, port, enableSsl);
-
-                // 不处理
-                return;
-
-                var mailFrom = fromEmail;
-
-                MailMessage mymail = new MailMessage();
-                mymail.From = new MailAddress(mailFrom);
-                mymail.To.Add(mailTo);
-                mymail.Subject = subject;
-                mymail.Body = body;
-                //mymail.IsBodyHtml = true;
-                //mymail.Attachments.Add(new Attachment(path));
-
-                using (SmtpClient smtpclient = new SmtpClient())
-                {
-                    smtpclient.Port = 587;
-                    smtpclient.UseDefaultCredentials = false;
-                    smtpclient.DeliveryMethod = SmtpDeliveryMethod.Network;
-                    smtpclient.Host = smtpServer;
-                    smtpclient.EnableSsl = true;
-                    smtpclient.Credentials = new NetworkCredential(fromEmail, password);
-                    smtpclient.Send(mymail);
-                }
             }
             catch (Exception ex)
             {

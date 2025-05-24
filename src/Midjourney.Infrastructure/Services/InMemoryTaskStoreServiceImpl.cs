@@ -14,7 +14,6 @@ namespace Midjourney.Infrastructure.Services
         /// <summary>
         /// 初始化内存任务存储服务。
         /// </summary>
-        /// <param name="timeout">任务超时时间。</param>
         public InMemoryTaskStoreServiceImpl()
         {
             _taskMap = new ConcurrentDictionary<string, TaskInfo>();

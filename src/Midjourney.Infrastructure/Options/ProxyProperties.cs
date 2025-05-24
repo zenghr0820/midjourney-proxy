@@ -377,13 +377,13 @@ namespace Midjourney.Infrastructure
         /// 机器人 Token
         ///
         /// 1. 创建应用
-        /// https://discord.com/developers/applications
+        /// <see href="https://discord.com/developers/applications"/>
         ///
         /// 2. 设置应用权限（确保拥有读取内容权限）
         /// [Bot] 设置 -> 全部开启
         ///
         /// 3. 添加应用到频道服务器
-        /// https://discord.com/oauth2/authorize?client_id=xxx&permissions=8&scope=bot
+        /// <see href="https://discord.com/oauth2/authorize?client_id=xxx&amp;permissions=8&amp;scope=bot"/>
         ///
         /// 4. 复制或重置 Bot Token
         /// </summary>
@@ -692,7 +692,7 @@ namespace Midjourney.Infrastructure
 
     /// <summary>
     /// 阿里云 OSS 配置
-    /// <see cref="https://help.aliyun.com/document_detail/31947.html"/>
+    /// <see href="https://help.aliyun.com/document_detail/31947.html"/>
     /// </summary>
     public class AliyunOssOptions
     {

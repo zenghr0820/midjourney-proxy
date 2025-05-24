@@ -1,6 +1,4 @@
-﻿
-
-using COSXML;
+﻿using COSXML;
 using COSXML.Auth;
 using COSXML.Model.Object;
 using Serilog;
@@ -86,21 +84,22 @@ namespace Midjourney.Infrastructure.Storage
                     _logger.Information("删除文件: {@key}", key);
                     DeleteObjectRequest request = new DeleteObjectRequest(_cosOptions.Bucket, key);
 
-                    var client = GetClient();
-
-                    DeleteObjectResult result = client.DeleteObject(request);
-                    if (result.httpCode != 204)
+                    // 使用Task.Run将同步操作包装成异步操作
+                    await Task.Run(() =>
                     {
-                        _logger.Warning("删除文件失败, {@deleteObjectResult}", result);
-                    }
+                        var client = GetClient();
+                        DeleteObjectResult result = client.DeleteObject(request);
+                        if (result.httpCode != 204)
+                        {
+                            _logger.Warning("删除文件失败, {@deleteObjectResult}", result);
+                        }
+                    });
                 }
                 catch (Exception ex)
                 {
                     _logger.Warning(ex, "删除文件异常, {key}", key);
                 }
             }
-
-            await Task.CompletedTask;
         }
 
         public Stream GetObject(string key)
@@ -149,12 +148,14 @@ namespace Midjourney.Infrastructure.Storage
         {
             try
             {
-                var client = GetClient();
-
-                HeadObjectRequest request = new HeadObjectRequest(_cosOptions.Bucket, key);
-                HeadObjectResult result = GetClient().HeadObject(request);
-
-                return result.httpCode == 200;
+                // 使用Task.Run将同步操作包装成异步操作
+                return await Task.Run(() =>
+                {
+                    var client = GetClient();
+                    HeadObjectRequest request = new HeadObjectRequest(_cosOptions.Bucket, key);
+                    HeadObjectResult result = client.HeadObject(request);
+                    return result.httpCode == 200;
+                });
             }
             catch
             {
