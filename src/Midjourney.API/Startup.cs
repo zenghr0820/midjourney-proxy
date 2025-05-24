@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.OpenApi.Models;
 using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.Options;
@@ -167,7 +168,7 @@ namespace Midjourney.API
 
             // 注册任务清理服务
             services.AddHostedService<TaskCleanupService>();
-            
+
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             services.AddEndpointsApiExplorer();
             services.AddSwaggerGen(c =>
@@ -242,7 +243,13 @@ namespace Midjourney.API
             }
 
             app.UseDefaultFiles(); // 启用默认文件（index.html）
-            app.UseStaticFiles(); // 配置提供静态文件
+            // app.UseStaticFiles(); // 配置提供静态文件
+            // 读取配置（开发环境优先读取 appsettings.Development.json）
+            string staticFilesPath = Configuration.GetValue<string>("StaticFiles:Path") ?? "wwwroot";
+            app.UseStaticFiles(new StaticFileOptions
+            {
+                FileProvider = new PhysicalFileProvider(Path.Combine(env.ContentRootPath, staticFilesPath))
+            });
 
             app.UseCors(builder =>
             {
