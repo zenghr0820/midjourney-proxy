@@ -7,7 +7,6 @@ using Microsoft.Extensions.Caching.Memory;
 using Midjourney.Infrastructure.LoadBalancer;
 using Midjourney.Infrastructure.Wss;
 using Newtonsoft.Json.Linq;
-using Midjourney.License;
 using Serilog;
 
 namespace Midjourney.Infrastructure.Services
@@ -200,11 +199,11 @@ namespace Midjourney.Infrastructure.Services
             var longTaskCache = new Task(RuningCache, _longToken.Token, TaskCreationOptions.LongRunning);
             longTaskCache.Start();
             
-            if (account.IsYouChuan || account.IsOfficial)
-            {
-                _ymTaskService = new YmTaskService(account, this, _cache);
-                _channelPoolManager.YmTaskService = _ymTaskService;
-            }
+            // if (account.IsYouChuan || account.IsOfficial)
+            // {
+            //     _ymTaskService = new YmTaskService(account, this, _cache);
+            //     _channelPoolManager.YmTaskService = _ymTaskService;
+            // }
         }
 
         /// <summary>

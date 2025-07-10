@@ -4,7 +4,7 @@ using Midjourney.Infrastructure.Services;
 using System.Net;
 using System.Text.RegularExpressions;
 
-using Midjourney.License;
+// using Midjourney.License;
 
 namespace Midjourney.API.Controllers
 {
@@ -96,7 +96,7 @@ namespace Midjourney.API.Controllers
                 try
                 {
                     // 验证许可证密钥
-                    await LicenseKeyHelper.Validate();
+                    // await LicenseKeyHelper.Validate();
                 }
                 catch (Exception ex)
                 {

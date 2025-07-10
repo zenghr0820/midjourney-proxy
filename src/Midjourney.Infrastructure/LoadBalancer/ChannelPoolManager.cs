@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Midjourney.Infrastructure.Services;
-using Midjourney.License;
 using Serilog;
 
 namespace Midjourney.Infrastructure.LoadBalancer

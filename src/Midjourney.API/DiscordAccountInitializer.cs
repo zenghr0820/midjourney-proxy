@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Caching.Memory;
 using Midjourney.Infrastructure.Services;
-using Midjourney.License;
+// using Midjourney.License;
 using Newtonsoft.Json.Linq;
 using RestSharp;
 using Serilog;
@@ -70,20 +70,20 @@ namespace Midjourney.API
                     });
 
                     // 官方下载下载器
-                    if (GlobalConfiguration.Setting.EnableOfficial)
-                    {
-                        Task.Run(async () =>
-                        {
-                            try
-                            {
-                                await LicenseKeyHelper.InitDonwloader();
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.Error(ex, "初始化官方业务异常");
-                            }
-                        });
-                    }
+                    // if (GlobalConfiguration.Setting.EnableOfficial)
+                    // {
+                    //     Task.Run(async () =>
+                    //     {
+                    //         try
+                    //         {
+                    //             await LicenseKeyHelper.InitDonwloader();
+                    //         }
+                    //         catch (Exception ex)
+                    //         {
+                    //             _logger.Error(ex, "初始化官方业务异常");
+                    //         }
+                    //     });
+                    // }
 
                     var setting = GlobalConfiguration.Setting;
 
@@ -375,7 +375,7 @@ namespace Midjourney.API
                         GlobalConfiguration.TotalDraw = (int)DbHelper.Instance.TaskStore.Count(x => true);
 
                         // 验证许可证密钥
-                        await LicenseKeyHelper.Validate();
+                        // await LicenseKeyHelper.Validate();
 
                         // 本地配置中的默认账号
                         var configAccounts = _properties.Accounts.ToList();

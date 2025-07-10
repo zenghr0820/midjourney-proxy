@@ -9,8 +9,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
 using Midjourney.Infrastructure.Services;
-using Midjourney.License;
-using MongoDB.Driver;
+// using Midjourney.License;
 using Serilog;
 
 
@@ -1816,21 +1815,21 @@ namespace Midjourney.API.Controllers
                 return Result.Fail("演示模式，禁止操作");
             }
 
-            try
-            {
-                // 保存时验证授权
-                var success = await LicenseKeyHelper.Validate(setting.EnableYouChuan, setting.EnableOfficial, setting.LicenseKey);
-                if (!success)
-                {
-                    return Result.Fail("授权验证失败，请检查授权码是否正确，如果没有授权码，请输入默认授权码：trueai.org");
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "授权验证失败");
-
-                return Result.Fail("授权验证失败，请检查授权码是否正确，如果没有授权码，请输入默认授权码：trueai.org");
-            }
+            // try
+            // {
+            //     // 保存时验证授权
+            //     var success = await LicenseKeyHelper.Validate(setting.EnableYouChuan, setting.EnableOfficial, setting.LicenseKey);
+            //     if (!success)
+            //     {
+            //         return Result.Fail("授权验证失败，请检查授权码是否正确，如果没有授权码，请输入默认授权码：trueai.org");
+            //     }
+            // }
+            // catch (Exception ex)
+            // {
+            //     Log.Error(ex, "授权验证失败");
+            //
+            //     return Result.Fail("授权验证失败，请检查授权码是否正确，如果没有授权码，请输入默认授权码：trueai.org");
+            // }
 
             setting.Id = Constants.DEFAULT_SETTING_ID;
 
@@ -1838,7 +1837,7 @@ namespace Midjourney.API.Controllers
 
             GlobalConfiguration.Setting = setting;
 
-            LicenseKeyHelper.LicenseKey = GlobalConfiguration.Setting.LicenseKey;
+            // LicenseKeyHelper.LicenseKey = GlobalConfiguration.Setting.LicenseKey;
 
             // 存储服务
             StorageHelper.Configure();

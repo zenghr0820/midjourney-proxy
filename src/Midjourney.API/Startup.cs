@@ -18,7 +18,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.OpenApi.Models;
 using Midjourney.Infrastructure.Services;
-using Midjourney.License;
+// using Midjourney.License;
 using Serilog;
 
 namespace Midjourney.API
@@ -93,7 +93,7 @@ namespace Midjourney.API
                 setting.LicenseKey = "trueai.org";
             }
 
-            LicenseKeyHelper.LicenseKey = setting.LicenseKey;
+            // LicenseKeyHelper.LicenseKey = setting.LicenseKey;
             LiteDBHelper.SettingStore.Save(setting);
             GlobalConfiguration.Setting = setting;
 
