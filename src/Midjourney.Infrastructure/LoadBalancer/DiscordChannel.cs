@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using Midjourney.Infrastructure.Util;
 
 namespace Midjourney.Infrastructure.LoadBalancer
 {

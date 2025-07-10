@@ -1,11 +1,10 @@
 ﻿
 
-using Microsoft.Extensions.Logging;
-using Midjourney.Infrastructure.Data;
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
 using JsonException = System.Text.Json.JsonException;
 using JsonSerializer = System.Text.Json.JsonSerializer;
 

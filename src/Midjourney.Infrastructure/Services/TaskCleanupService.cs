@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Hosting;
-using Midjourney.Infrastructure.Data;
 using Serilog;
 
 namespace Midjourney.Infrastructure.Services

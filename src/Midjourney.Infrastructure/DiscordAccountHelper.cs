@@ -1,14 +1,10 @@
-﻿using Microsoft.Extensions.Caching.Memory;
-using Midjourney.Infrastructure.Data;
-using Midjourney.Infrastructure.Dto;
+using Microsoft.Extensions.Caching.Memory;
 using Midjourney.Infrastructure.Handle;
-using Midjourney.Infrastructure.LoadBalancer;
 using Midjourney.Infrastructure.Services;
 using Midjourney.Infrastructure.Wss;
 using RestSharp;
 using Serilog;
 using System.Net;
-using System.Reflection;
 using System.Text.Json;
 
 namespace Midjourney.Infrastructure
@@ -19,7 +15,7 @@ namespace Midjourney.Infrastructure
     public class DiscordAccountHelper
     {
         private readonly DiscordHelper _discordHelper;
-        private readonly ProxyProperties _properties;
+        private readonly Setting _properties;
 
         private readonly ITaskStoreService _taskStoreService;
         private readonly INotifyService _notifyService;
@@ -45,7 +41,7 @@ namespace Midjourney.Infrastructure
             _memoryCache = memoryCache;
             _webSocketStarterFactory = webSocketStarterFactory;
             var paramsMap = new Dictionary<string, string>();
-            var assembly = Assembly.GetExecutingAssembly();
+            var assembly = typeof(GlobalConfiguration).Assembly; // Assembly.GetExecutingAssembly();
             var assemblyName = assembly.GetName().Name;
             var resourceNames = assembly.GetManifestResourceNames()
                 .Where(name => name.EndsWith(".json") && name.Contains("Resources.ApiParams"))
@@ -63,6 +59,8 @@ namespace Midjourney.Infrastructure
                 paramsMap[fileKey] = paramsContent;
             }
 
+            GlobalConfiguration.ResourcesParamsMap = paramsMap;
+
             _paramsMap = paramsMap;
             _taskService = taskService;
         }
@@ -75,9 +73,12 @@ namespace Midjourney.Infrastructure
         /// <exception cref="ArgumentException">当guildId, channelId或userToken为空时抛出。</exception>
         public async Task<DiscordInstance> CreateDiscordInstance(DiscordAccount account)
         {
-            if (string.IsNullOrWhiteSpace(account.GuildId) || string.IsNullOrWhiteSpace(account.ChannelId) || string.IsNullOrWhiteSpace(account.UserToken))
+            if (!account.IsYouChuan && !account.IsOfficial)
             {
-                throw new ArgumentException("guildId, channelId, userToken must not be blank");
+                if (string.IsNullOrWhiteSpace(account.GuildId) || string.IsNullOrWhiteSpace(account.ChannelId) || string.IsNullOrWhiteSpace(account.UserToken))
+                {
+                    throw new ArgumentException("guildId, channelId, userToken must not be blank");
+                }
             }
 
             if (string.IsNullOrWhiteSpace(account.UserAgent))
@@ -104,16 +105,31 @@ namespace Midjourney.Infrastructure
 
             if (account.Enable == true)
             {
-                // 使用工厂创建WebSocketStarter，工厂内部会设置WebSocketStarter到DiscordInstance
-                var webSocketStarter = _webSocketStarterFactory.CreateDiscordSocketWithInstance(discordInstance);
-                await webSocketStarter.StartAsync();
-                
+                if (account.IsYouChuan)
+                {
+                    if (string.IsNullOrWhiteSpace(account.UserToken))
+                    {
+                        await discordInstance.YouChuanLogin();
+                    }
+                }
+                else if (account.IsOfficial)
+                {
+
+                }
+                else
+                {
+                    // 使用工厂创建WebSocketStarter，工厂内部会设置WebSocketStarter到DiscordInstance
+                    var webSocketStarter = _webSocketStarterFactory.CreateDiscordSocketWithInstance(discordInstance);
+                    await webSocketStarter.StartAsync();
+                }
+
                 // 不需要再次设置WebSocketStarter，因为工厂已经设置了
                 // discordInstance.WebSocketStarter = webSocketStarter;
+                
             }
             else
             {
-                Log.Information("Discord账号未启用, 跳过连接 - 账号: {0}", account.GetDisplay());
+                    Log.Information("Discord账号未启用, 跳过连接 - 账号: {0}", account.GetDisplay());
             }
 
             return discordInstance;

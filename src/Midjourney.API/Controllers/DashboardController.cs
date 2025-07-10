@@ -1,9 +1,4 @@
 using Microsoft.AspNetCore.Mvc;
-using Midjourney.Infrastructure.Data;
-using Midjourney.Infrastructure.Dto;
-using Midjourney.Infrastructure.Services;
-
-using TaskStatus = Midjourney.Infrastructure.TaskStatus;
 
 namespace Midjourney.API.Controllers
 {

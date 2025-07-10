@@ -1,6 +1,4 @@
-﻿
-
-using Midjourney.Infrastructure.Options;
+﻿using Midjourney.Infrastructure.Options;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using PuppeteerSharp;

@@ -24,8 +24,24 @@ The most powerful, complete, full-featured, completely free and open source Midj
 
 <img src="./docs/screenshots/565908696.png" alt="欢迎" width="360"/>
 
+## Midjourney 官网绘图接入文档
+
+- https://trueai-org.feishu.cn/docx/ZDeUdPCBho4IE0xJHxpcXbdYnKd
+
+## 悠船接入文档
+
+- https://trueai-org.feishu.cn/docx/KrdIdOKm4otVmwxdv3AcLjsEnXf
+ 
+<img src="./docs/screenshots/youchuanhezuo.jpg" alt="悠船合作群" width="360"/>
+
 ## 主要功能
 
+- [x] 支持 Discord 绘图。
+- [x] 支持悠船绘图。
+- [x] 支持官网 Midjourney 绘图（内测中）。
+- [x] 增加在线升级功能。
+- [x] 增加在线重启功能。
+- [x] 支持弹性部署，负载均衡，支持 Consul 配置中心。
 - [x] 支持 Imagine 指令和相关动作 [V1/V2.../U1/U2.../R]
 - [x] Imagine 时支持添加图片 base64，作为垫图
 - [x] 支持 Blend (图片混合)、Describe (图生文) 指令、Shorten (提示词分析) 指令
@@ -153,6 +169,8 @@ The most powerful, complete, full-featured, completely free and open source Midj
 注意：一定确认映射文件和路径不要出错⚠
 
 ```bash
+# 提示：官方镜像需要更多内存，服务器最低：2GB 内存
+# 官方镜像（完整版，支持Discord、悠船、官方绘图，包含更多依赖）
 # 自动安装并启动
 # 推荐使用一键升级脚本
 # 1.首次下载（下载后可以编辑此脚本，进行自定义配置，例如：路径、端口、内存等配置，默认8086端口）
@@ -160,6 +178,12 @@ wget -O docker-upgrade.sh https://raw.githubusercontent.com/trueai-org/midjourne
 
 # 2.更新升级（以后升级只需要执行此脚本即可）
 sh docker-upgrade.sh
+```
+
+```bash
+# 基础镜像（轻量版，支持Discord、悠船绘图）
+docker pull registry.cn-guangzhou.aliyuncs.com/trueai-org/midjourney-proxy:lite
+docker pull registry.cn-guangzhou.aliyuncs.com/trueai-org/midjourney-proxy:lite-{version}
 ```
 
 ```bash
@@ -296,7 +320,7 @@ curl -o linux_install.sh https://raw.githubusercontent.com/trueai-org/midjourney
 - `LiteDB`（不推荐）：本地数据库库，默认数据库，默认存储位置：`data/mj.db`
 - `Sqlite`：本地数据库，默认存储位置：`data/mj_sqlite.db`
 - `MongoDB`（推荐）：需要配置数据库连接字符串，示例：`mongodb://mongoadmin:***@192.168.3.241`，需要配置数据库名称：`mj`
-- `MySQL`：需要配置数据库连接字符串，示例：`Data Source=192.168.3.241;Port=3306;User ID=root;Password=xxx; Initial Catalog=mj;Charset=utf8mb4; SslMode=none;Min pool size=1`
+- `MySQL(建议使用 8.x 版本)`：需要配置数据库连接字符串，示例：`Data Source=192.168.3.241;Port=3306;User ID=root;Password=xxx; Initial Catalog=mj;Charset=utf8mb4; SslMode=none;Min pool size=1`
 - `SqlServer`：需要配置数据库连接字符串，示例：`Data Source=192.168.3.241;User Id=sa;Password=xxx;Initial Catalog=mj;Encrypt=True;TrustServerCertificate=True;Pooling=true;Min Pool Size=1`
 - `PostgreSQL`：需要配置数据库连接字符串，示例：`Host=192.168.3.241;Port=5432;Username=mj;Password=xxx; Database=mj;ArrayNullabilityMode=Always;Pooling=true;Minimum Pool Size=1`，需要启动扩展支持字典类型 `CREATE EXTENSION hstore`
 
@@ -414,6 +438,30 @@ docker run -d \
 - 每日最大 200 张
 - 每日工作时间，建议 9：10~22：50
 - 如果有多个账号，则建议开启垂直领域功能，每个账号只做某一类作品
+
+## Consul 配置
+
+```bash
+
+docker stop consul && docker rm consul
+docker run -d --name consul --restart always --network host hashicorp/consul agent -server -ui -node=server-1 -bootstrap-expect=1 -client=0.0.0.0 -bind=172.17.1.99
+
+docker run -d --name consul --network host hashicorp/consul agent -server -ui -node=server-1 -bootstrap-expect=1 -client=0.0.0.0 -bind=172.19.38.1
+
+docker run -d --name consul -p 9500:8500 -p 9600:8600/udp hashicorp/consul agent -server -ui -node=server-1 -bootstrap-expect=1 -client=0.0.0.0 -bind=0.0.0.0
+
+docker run -d --name consul -p 9500:8500 -p 9600:8600/udp hashicorp/consul agent -server -ui -node=server-1 -bootstrap-expect=1 -client=0.0.0.0 -bind=172.19.38.1
+
+docker run -d --name consul --network host hashicorp/consul:latest agent -server -ui -node=server-1 -bootstrap-expect=1 -client=0.0.0.0 -bind=172.19.38.1
+
+docker run -d --name consul --network host hashicorp/consul:latest agent -server -ui -node=server-1 -bootstrap-expect=1 -client=0.0.0.0 -bind=192.168.3.241
+
+docker run -d --name consul --network host hashicorp/consul:latest agent -server -ui -node=server-1 -bootstrap-expect=1 "-client=0.0.0.0"
+
+docker run -d --name consul -p 8500:8500 -p 8600:8600/udp hashicorp/consul:latest agent -server -ui -node=server-1 -bootstrap-expect=1 "-client=0.0.0.0"
+
+docker run -d --name consul -p 8500:8500 -p 8600:8600/udp consul:latest agent -server -ui -node=server-1 -bootstrap-expect=1 "-client=0.0.0.0"
+```
 
 ## 支持与赞助
 

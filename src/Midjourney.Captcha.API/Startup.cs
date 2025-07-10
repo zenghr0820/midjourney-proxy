@@ -1,15 +1,13 @@
-﻿
-
-global using Midjourney.Infrastructure;
-global using Midjourney.Infrastructure.Models;
-
+﻿using System.Reflection;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.OpenApi.Models;
+using Midjourney.Base;
+using Midjourney.Base.Models;
+using Midjourney.Captcha.API.Filters;
 using Midjourney.Infrastructure.Options;
 using Serilog;
-using System.Reflection;
-using System.Text.Json.Serialization;
 
 namespace Midjourney.Captcha.API
 {
@@ -25,17 +23,6 @@ namespace Midjourney.Captcha.API
         public void ConfigureServices(IServiceCollection services)
         {
             services.Configure<CaptchaOption>(Configuration.GetSection("Captcha"));
-
-            // 是否为演示模式
-            var isDemoMode = Configuration.GetSection("Demo").Get<bool?>();
-            if (isDemoMode != true)
-            {
-                if (bool.TryParse(Environment.GetEnvironmentVariable("DEMO"), out var demo) && demo)
-                {
-                    isDemoMode = demo;
-                }
-            }
-            GlobalConfiguration.IsDemoMode = isDemoMode;
 
             // 缓存
             services.AddMemoryCache();
@@ -110,7 +97,17 @@ namespace Midjourney.Captcha.API
 
         public void Configure(IApplicationBuilder app, IHostEnvironment env)
         {
-            if (env.IsDevelopment() || GlobalConfiguration.IsDemoMode == true)
+            // 是否为演示模式
+            var isDemoMode = Configuration.GetSection("Demo").Get<bool?>();
+            if (isDemoMode != true)
+            {
+                if (bool.TryParse(Environment.GetEnvironmentVariable("DEMO"), out var demo) && demo)
+                {
+                    isDemoMode = demo;
+                }
+            }
+
+            if (env.IsDevelopment() || isDemoMode == true)
             {
                 app.UseDeveloperExceptionPage();
 

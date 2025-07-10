@@ -1,6 +1,5 @@
 ﻿
 using Microsoft.Extensions.Caching.Memory;
-using Midjourney.Infrastructure.Data;
 
 namespace Midjourney.API
 {

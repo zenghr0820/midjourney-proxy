@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using Midjourney.Infrastructure.Data;
-using Midjourney.Infrastructure.Util;
+using Midjourney.Infrastructure.Services;
+using Midjourney.License;
 using Serilog;
 
 namespace Midjourney.Infrastructure.LoadBalancer
@@ -15,9 +15,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
         private readonly ConcurrentDictionary<string, DiscordChannel> _channelPool = new();
         private readonly DiscordInstance _instance;
         private readonly IChannelSelectionStrategy _selectionStrategy;
-
         private readonly CancellationTokenSource _longToken;
-
         private readonly DiscordAccount _account;
 
         /// <summary>
@@ -76,6 +74,11 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// 获取所有频道ID
         /// </summary>
         public List<string> AllChannelIds => _channelPool.Keys.ToList();
+        
+        /// <summary>
+        /// 悠船账号任务Service
+        /// </summary>
+        public IYmTaskService YmTaskService { get; set; }
 
         /// <summary>
         /// 获取所有频道
@@ -232,7 +235,10 @@ namespace Midjourney.Infrastructure.LoadBalancer
                                 try
                                 {
                                     // 使用原有的ExecuteTaskAsync方法执行任务
-                                    channel.TaskFutureMap[info.Item1.Id] = ExecuteTaskAsync(channel, info.Item1, info.Item2);
+                                    channel.TaskFutureMap[info.Item1.Id] = Task.Run(async () =>
+                                    {
+                                        await ExecuteTaskAsync(channel, info.Item1, info.Item2);
+                                    });
 
                                     // 计算执行后的间隔
                                     var min = _account.AfterIntervalMin;
@@ -644,9 +650,9 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     await _taskChangeEvent.InvokeAsync(info);
                     return;
                 }
-
                 info.Status = TaskStatus.SUBMITTED;
                 info.Progress = "0%";
+                
                 await _taskChangeEvent.InvokeAsync(info);
 
                 // 检查取消令牌
@@ -689,8 +695,11 @@ namespace Midjourney.Infrastructure.LoadBalancer
                     return;
                 }
 
-                info.Status = TaskStatus.SUBMITTED;
-                info.Progress = "0%";
+                if (info.Status != TaskStatus.FAILURE && info.Status != TaskStatus.SUCCESS)
+                {
+                    info.Status = TaskStatus.SUBMITTED;
+                    info.Progress = "0%";
+                }
 
                 await Task.Delay(500, cts.Token);
 
@@ -703,6 +712,12 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
                 while (info.Status == TaskStatus.SUBMITTED || info.Status == TaskStatus.IN_PROGRESS)
                 {
+                    // 如果是悠船任务，则每 2s 获取一次
+                    if (YmTaskService != null && (info.IsPartner || info.IsOfficial))
+                    {
+                        await YmTaskService.UpdateStatus(info);
+                        await Task.Delay(1000);
+                    }
                     // 检查取消令牌
                     if (cts.Token.IsCancellationRequested)
                     {
@@ -728,7 +743,7 @@ namespace Midjourney.Infrastructure.LoadBalancer
                 try
                 {
                     // 成功才都消息
-                    if (info.Status == TaskStatus.SUCCESS)
+                    if (info.Status == TaskStatus.SUCCESS && !info.IsPartner && !info.IsOfficial)
                     {
                         var res = await _instance.ReadMessageAsync(info.MessageId, info.ChannelId);
                         if (res.Code == ReturnCode.SUCCESS)

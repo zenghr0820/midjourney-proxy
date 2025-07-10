@@ -1,9 +1,10 @@
-﻿
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Midjourney.Base;
+using Midjourney.Base.Models;
 using Serilog;
 
-namespace Midjourney.Captcha.API
+namespace Midjourney.Captcha.API.Filters
 {
     /// <summary>
     /// 自定义方法过滤器

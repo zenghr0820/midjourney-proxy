@@ -1,9 +1,6 @@
 using System.Net;
 using System.Text.Json;
-using Midjourney.Infrastructure.Data;
-using Midjourney.Infrastructure.Dto;
-using Midjourney.Infrastructure.LoadBalancer;
-using Midjourney.Infrastructure.Util;
+using Midjourney.Infrastructure.Services;
 using RestSharp;
 using Serilog;
 

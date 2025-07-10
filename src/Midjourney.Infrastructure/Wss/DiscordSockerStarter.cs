@@ -1,9 +1,4 @@
 using Microsoft.Extensions.Caching.Memory;
-using Midjourney.Infrastructure.Data;
-using Midjourney.Infrastructure.Dto;
-using Midjourney.Infrastructure.LoadBalancer;
-using Midjourney.Infrastructure.Util;
-using Midjourney.Infrastructure.Wss.Gateway;
 using Midjourney.Infrastructure.Wss.Handle;
 using Serilog;
 using System.Collections.Concurrent;
@@ -14,6 +9,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Midjourney.Infrastructure.Services;
 using UAParser;
 
 namespace Midjourney.Infrastructure.Wss
@@ -144,8 +140,6 @@ namespace Midjourney.Infrastructure.Wss
             _config = config ?? new WebSocketConfig();
 
             _logger = Log.Logger.ForContext("LogPrefix", $"{Account.GuildId} - socket");
-
-            _properties = GlobalConfiguration.Setting;
 
             _cancellationTokenSource = new CancellationTokenSource();
             _processingTask = Task.Run(ProcessMessages, _cancellationTokenSource.Token);

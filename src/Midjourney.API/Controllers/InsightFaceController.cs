@@ -1,13 +1,6 @@
-﻿
-
+﻿using System.Net;
 using Microsoft.AspNetCore.Mvc;
-using Midjourney.Infrastructure.Data;
-using Midjourney.Infrastructure.Dto;
-using Midjourney.Infrastructure.LoadBalancer;
-using Midjourney.Infrastructure.Util;
-using System.Net;
-
-using TaskStatus = Midjourney.Infrastructure.TaskStatus;
+using Midjourney.Infrastructure.Services;
 
 namespace Midjourney.API.Controllers
 {
@@ -21,7 +14,7 @@ namespace Midjourney.API.Controllers
     [Route("mj-relax/mj/insight-face")]
     public class InsightFaceController : ControllerBase
     {
-        private readonly ILogger _logger;
+        private readonly ILogger _logger = Serilog.Log.Logger;
         private readonly string _ip;
 
         private readonly GenerationSpeedMode? _mode;
@@ -30,13 +23,11 @@ namespace Midjourney.API.Controllers
         private readonly VideoFaceSwapInstance _videoFaceSwapInstance;
 
         public InsightFaceController(
-            ILogger<InsightFaceController> logger,
             IHttpContextAccessor httpContextAccessor,
             WorkContext workContext,
             FaceSwapInstance faceSwapInstance,
             VideoFaceSwapInstance videoFaceSwapInstance)
         {
-            _logger = logger;
             _workContext = workContext;
 
             var user = _workContext.GetUser();
@@ -230,13 +221,13 @@ namespace Midjourney.API.Controllers
         {
             task.AccountFilter = accountFilter;
 
+            if (task.AccountFilter == null)
+            {
+                task.AccountFilter = new AccountFilter();
+            }
+
             if (_mode != null)
             {
-                if (task.AccountFilter == null)
-                {
-                    task.AccountFilter = new AccountFilter();
-                }
-
                 if (!task.AccountFilter.Modes.Contains(_mode.Value))
                 {
                     task.AccountFilter.Modes.Add(_mode.Value);

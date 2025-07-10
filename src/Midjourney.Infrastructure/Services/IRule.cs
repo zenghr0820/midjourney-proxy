@@ -1,6 +1,4 @@
-﻿
-
-namespace Midjourney.Infrastructure.LoadBalancer
+﻿namespace Midjourney.Infrastructure.Services
 {
     /// <summary>
     /// 定义选择 Discord 实例的规则接口。

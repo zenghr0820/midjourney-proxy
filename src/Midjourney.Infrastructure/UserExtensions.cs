@@ -1,5 +1,3 @@
-using Midjourney.Infrastructure.Dto;
-
 namespace Midjourney.Infrastructure
 {
     public static class UserExtensions

@@ -1,14 +1,13 @@
-﻿
-
+﻿using System.Collections.Concurrent;
+using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
-using Midjourney.Infrastructure.Dto;
+using Midjourney.Base;
+using Midjourney.Base.Dto;
+using Midjourney.Base.Util;
 using Midjourney.Infrastructure.Options;
-using Midjourney.Infrastructure.Util;
 using RestSharp;
 using Serilog;
-using System.Collections.Concurrent;
-using System.Text.Json;
 
 namespace Midjourney.Captcha.API
 {

@@ -1,28 +1,22 @@
 ﻿using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Caching.Memory;
-using Midjourney.Infrastructure.Data;
-using Midjourney.Infrastructure.Dto;
-using Midjourney.Infrastructure.Services;
-using Midjourney.Infrastructure.Storage;
-using Midjourney.Infrastructure.Util;
+using Midjourney.Infrastructure.LoadBalancer;
 using Midjourney.Infrastructure.Wss;
-using Midjourney.Infrastructure.Wss.Gateway;
 using Newtonsoft.Json.Linq;
+using Midjourney.License;
 using Serilog;
-using ILogger = Serilog.ILogger;
 
-namespace Midjourney.Infrastructure.LoadBalancer
+namespace Midjourney.Infrastructure.Services
 {
     /// <summary>
     /// Discord 实例
     /// 实现了IDiscordInstance接口，负责处理Discord相关的任务管理和执行。
     /// </summary>
-    public class DiscordInstance
+    public class DiscordInstance : IDiscordInstance
     {
         private readonly object _lockAccount = new object();
 
@@ -33,7 +27,6 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
 
         private readonly CancellationTokenSource _longToken;
-        private readonly Task _longTaskCache;
 
         private readonly HttpClient _httpClient;
         private readonly DiscordHelper _discordHelper;
@@ -51,6 +44,14 @@ namespace Midjourney.Infrastructure.LoadBalancer
         public ChannelPoolManager ChannelPool => _channelPoolManager;
 
         private DiscordAccount _account;
+        
+        // 悠船账号任务Service
+        private readonly IYmTaskService _ymTaskService;
+        
+        /// <summary>
+        /// 悠船 / 官方任务处理
+        /// </summary>
+        public IYmTaskService YmTaskService => _ymTaskService;
 
         /// <summary>
         /// 获取Discord账号信息。
@@ -125,13 +126,32 @@ namespace Midjourney.Infrastructure.LoadBalancer
         /// 判断实例是否存活
         /// </summary>
         /// <returns>是否存活</returns>
-        public bool IsAlive => IsInit && Account != null
-             && Account.Enable != null && Account.Enable == true
-             && WebSocketStarter != null
-             && WebSocketStarter.IsRunning == true
-             && Account.Lock == false;
+        public bool IsAlive
+        {
+            get
+            {
+                if (Account.IsYouChuan)
+                {
+                    return IsInit && Account is { Enable: true }
+                                  && !string.IsNullOrWhiteSpace(_ymTaskService?.YouChuanToken);
+                }
+                else if (Account.IsOfficial)
+                {
+                    return IsInit && Account is { Enable: true }
+                                  && !string.IsNullOrWhiteSpace(_ymTaskService?.OfficialToken);
+                }
+                else
+                {
+                    return IsInit && Account is { Enable: true }
+                                  && WebSocketStarter is { IsRunning: true }
+                                  && Account.Lock == false;
+                }
+            }
+        }
 
         public IWebSocketStarter WebSocketStarter { get; set; }
+        
+        public DiscordHelper DiscordHelper => _discordHelper;
 
         public DiscordInstance(
             IMemoryCache memoryCache,
@@ -177,9 +197,14 @@ namespace Midjourney.Infrastructure.LoadBalancer
             _longToken = new CancellationTokenSource();
 
             // 启动缓存处理任务
-            _longTaskCache = new Task(RuningCache, _longToken.Token, TaskCreationOptions.LongRunning);
-            _longTaskCache.Start();
-
+            var longTaskCache = new Task(RuningCache, _longToken.Token, TaskCreationOptions.LongRunning);
+            longTaskCache.Start();
+            
+            if (account.IsYouChuan || account.IsOfficial)
+            {
+                _ymTaskService = new YmTaskService(account, this, _cache);
+                _channelPoolManager.YmTaskService = _ymTaskService;
+            }
         }
 
         /// <summary>
@@ -189,6 +214,43 @@ namespace Midjourney.Infrastructure.LoadBalancer
         public void ClearAccountCache(string id)
         {
             _cache.Remove($"account:{id}");
+        }
+        
+        /// <summary>
+        /// 悠船登录
+        /// </summary>
+        /// <returns></returns>
+        public async Task YouChuanLogin()
+        {
+            await _ymTaskService.YouChuanLogin();
+        }
+
+        /// <summary>
+        /// 验证 JWT Token 格式
+        /// </summary>
+        /// <param name="token"></param>
+        public bool JwtTokenValidate(string token)
+        {
+            // 验证 jwt 使用正则验证
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return false;
+            }
+
+            // 正则表达式验证 JWT 格式
+            var regex = new Regex(@"^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$");
+            var match = regex.Match(token);
+            return match.Success;
+
+            // discord 并非 jwt
+            //// JWT token 格式验证，使用 jwtreader
+            //var jwtHandler = new JwtSecurityTokenHandler();
+            //var securityToken = jwtHandler.ReadJwtToken(token);
+            //if (securityToken == null || securityToken.Payload.Count <= 0)
+            //{
+            //    return false;
+            //}
+            //return true;
         }
 
         /// <summary>
@@ -786,6 +848,10 @@ namespace Midjourney.Infrastructure.LoadBalancer
         {
             try
             {
+                if (!JwtTokenValidate(Account.UserToken))
+                {
+                    return Message.Of(ReturnCode.VALIDATION_ERROR, "令牌错误");
+                }
                 // 解码
                 url = System.Web.HttpUtility.UrlDecode(url);
 
@@ -993,6 +1059,10 @@ namespace Midjourney.Infrastructure.LoadBalancer
         private async Task<HttpResponseMessage> PostJsonAsync(string url, string paramsStr)
         {
             _logger.Information("PostJsonAsync url = {@0}, paramsStr = {@1}", url, paramsStr);
+            if (!JwtTokenValidate(Account.UserToken))
+            {
+                throw new LogicException(ReturnCode.VALIDATION_ERROR, "令牌错误");
+            }
             HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = new StringContent(paramsStr, Encoding.UTF8, "application/json")
@@ -1863,6 +1933,15 @@ namespace Midjourney.Infrastructure.LoadBalancer
 
             // 无论任务是否被移除，都通知任务状态变化
             SaveAndNotify(task);
+        }
+        
+        /// <summary>
+        /// 悠船每 3-5 分钟同步一次账号信息
+        /// </summary>
+        /// <returns></returns>
+        public async Task YouChuanSyncInfo()
+        {
+            await _ymTaskService.YouChuanSyncInfo();
         }
 
     }

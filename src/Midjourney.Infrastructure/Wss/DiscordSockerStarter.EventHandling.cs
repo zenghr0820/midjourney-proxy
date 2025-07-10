@@ -1,17 +1,7 @@
 using System.Collections.Concurrent;
 using Midjourney.Infrastructure.Wss.Handle;
-using Serilog;
 using System.Text.Json;
 using System.Threading.Channels;
-using Midjourney.Infrastructure.Dto;
-using Midjourney.Infrastructure.Data;
-using Midjourney.Infrastructure.Util;
-using RestSharp;
-using System.Net;
-using System.Text.RegularExpressions;
-using Midjourney.Infrastructure.Wss.Gateway;
-using System.Threading.Tasks;
-using Midjourney.Infrastructure.LoadBalancer;
 
 namespace Midjourney.Infrastructure.Wss
 {
@@ -29,7 +19,6 @@ namespace Midjourney.Infrastructure.Wss
         });
 
         private readonly IEnumerable<MessageHandler> _messageHandlers;
-        private readonly ProxyProperties _properties;
 
         private readonly ConcurrentDictionary<string, DiscordChannelDto> _dmChannels = new();
         private readonly ConcurrentDictionary<string, DiscordExtendedGuild> _guilds = new();

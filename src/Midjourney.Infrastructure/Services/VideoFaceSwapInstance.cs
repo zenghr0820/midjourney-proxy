@@ -1,21 +1,16 @@
 ﻿
 
-using Microsoft.Extensions.Caching.Memory;
-using Midjourney.Infrastructure.Dto;
-using Midjourney.Infrastructure.Services;
-using Midjourney.Infrastructure.Storage;
-using Midjourney.Infrastructure.Util;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Caching.Memory;
 
-namespace Midjourney.Infrastructure.LoadBalancer
+namespace Midjourney.Infrastructure.Services
 {
     /// <summary>
     /// 视频换脸服务
     /// </summary>
     public class VideoFaceSwapInstance : BaseFaceSwapInstance
     {
-        private readonly Task _longTask;
         private readonly AsyncParallelLock _semaphoreSlimLock;
         private readonly CancellationTokenSource _longToken;
         private readonly ManualResetEvent _mre;
@@ -32,8 +27,8 @@ namespace Midjourney.Infrastructure.LoadBalancer
             _mre = new ManualResetEvent(false);
 
             _longToken = new CancellationTokenSource();
-            _longTask = new Task(Running, _longToken.Token, TaskCreationOptions.LongRunning);
-            _longTask.Start();
+            var longTask = new Task(Running, _longToken.Token, TaskCreationOptions.LongRunning);
+            longTask.Start();
         }
 
         /// <summary>

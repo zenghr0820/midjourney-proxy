@@ -1,4 +1,4 @@
-using Midjourney.Infrastructure.LoadBalancer;
+using Midjourney.Infrastructure.Services;
 using Serilog;
 using Serilog.Context;
 

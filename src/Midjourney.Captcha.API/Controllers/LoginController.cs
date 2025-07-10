@@ -1,7 +1,5 @@
-﻿
-
-using Microsoft.AspNetCore.Mvc;
-using Midjourney.Infrastructure.Dto;
+﻿using Microsoft.AspNetCore.Mvc;
+using Midjourney.Base.Dto;
 
 namespace Midjourney.Captcha.API.Controllers
 {

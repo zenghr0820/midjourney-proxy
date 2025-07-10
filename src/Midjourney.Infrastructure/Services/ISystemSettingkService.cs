@@ -1,6 +1,3 @@
-using Midjourney.Infrastructure.Dto;
-using Midjourney.Infrastructure.Util;
-
 namespace Midjourney.Infrastructure.Services
 {
     /// <summary>

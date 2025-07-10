@@ -4,6 +4,9 @@ using Serilog;
 using Serilog.Debugging;
 using System.Net;
 using System.Net.Security;
+using Serilog;
+using Serilog.Debugging;
+using Serilog.Events;
 
 namespace Midjourney.Captcha.API
 {
@@ -15,41 +18,22 @@ namespace Midjourney.Captcha.API
             //ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
             //ServicePointManager.SecurityProtocol = SecurityProtocolType.SystemDefault;
 
-            var builder = CreateHostBuilder(args).Build();
-            var env = builder.Services.GetService<IWebHostEnvironment>();
-
-            // ���� Serilog
-            var logger = new LoggerConfiguration()
-                .ReadFrom.Configuration(builder.Services.GetService<IConfiguration>());
-
-            if (env.IsDevelopment())
-            {
-                logger.MinimumLevel.Debug()
-                      .Enrich.FromLogContext();
-
-                // ʹ�� Serilog.Debugging.SelfLog.Enable(Console.Error) ������ Serilog ��������ϣ��⽫��������������⡣
-                SelfLog.Enable(Console.Error);
-            }
-
-            Log.Logger = logger.CreateLogger();
-
-            // ȷ����Ӧ�ó������ʱ�رղ�ˢ����־
-            AppDomain.CurrentDomain.ProcessExit += (s, e) => Log.CloseAndFlush();
-
             try
             {
-                Log.Information($"Current: {Directory.GetCurrentDirectory()}");
+                // ��������������
+                var host = CreateHostBuilder(args).Build();
 
-                //// ʹ�� Serilog
-                //builder.Host.UseSerilog();
+                // ȷ����Ӧ�ó������ʱ�رղ�ˢ����־
+                AppDomain.CurrentDomain.ProcessExit += (s, e) => Log.CloseAndFlush();
 
-                var app = builder;
+                // ��¼��ǰĿ¼
+                Log.Information($"Current directory: {Directory.GetCurrentDirectory()}");
 
-                app.Run();
+                host.Run();
             }
             catch (Exception ex)
             {
-                Log.Fatal(ex, "Ӧ������ʧ��");
+                Log.Fatal(ex, "Ӧ�ó�������ʧ��");
             }
             finally
             {
@@ -58,11 +42,70 @@ namespace Midjourney.Captcha.API
         }
 
         public static IHostBuilder CreateHostBuilder(string[] args) =>
-            Host.CreateDefaultBuilder(args)
-                .ConfigureWebHostDefaults(webBuilder =>
+          Host.CreateDefaultBuilder(args)
+            .ConfigureAppConfiguration((hostingContext, config) =>
+            {
+                // ���ö�ȡ��ɺ󣬿����������������ǰ��������
+                var configuration = config.Build();
+
+                // ���������������־����ʹ��������Ϣ
+                ConfigureInitialLogger(configuration, hostingContext.HostingEnvironment.IsDevelopment());
+            })
+            .ConfigureLogging((hostContext, loggingBuilder) =>
+            {
+                // ����Ĭ����־�ṩ������ȫ���� Serilog
+                loggingBuilder.ClearProviders();
+            })
+            .UseSerilog()
+            .ConfigureWebHostDefaults(webBuilder =>
+            {
+                webBuilder.UseStartup<Startup>();
+            });
+
+        /// <summary>
+        /// ��ȡ���ò����³�ʼ��־��
+        /// </summary>
+        /// <param name="configuration"></param>
+        /// <param name="isDevelopment"></param>
+        private static void ConfigureInitialLogger(IConfiguration configuration, bool isDevelopment)
+        {
+            // ������־����
+            var loggerConfiguration = new LoggerConfiguration()
+                  .ReadFrom.Configuration(configuration)
+                  .Enrich.FromLogContext();
+
+            // ���������ض�����
+            if (isDevelopment)
+            {
+                loggerConfiguration.MinimumLevel.Debug();
+
+                // ���������û�����ÿ���̨��־�������
+                // ���򣬲�Ҫ�ڴ�������ӣ������ظ�
+                bool hasConsoleInConfig = configuration
+                    .GetSection("Serilog:WriteTo")
+                    .GetChildren()
+                    .Any(section => section["Name"]?.Equals("Console", StringComparison.OrdinalIgnoreCase) == true);
+
+                if (!hasConsoleInConfig)
                 {
-                    webBuilder.UseStartup<Startup>();
-                })
-                .UseSerilog();
+                    loggerConfiguration.WriteTo.Console();
+                }
+
+                // ���� Serilog �������
+                SelfLog.Enable(Console.Error);
+            }
+            else
+            {
+                // ��������ʹ�� appsettings.json �е���С��־��������
+                loggerConfiguration.WriteTo.Console(restrictedToMinimumLevel: LogEventLevel.Information);
+            }
+
+            // ���л�������¼���󵽵����ļ�
+            loggerConfiguration.WriteTo.Logger(lc => lc
+                .Filter.ByIncludingOnly(evt => evt.Level >= LogEventLevel.Error)
+                .WriteTo.File("logs/error.txt", rollingInterval: RollingInterval.Day));
+
+            Log.Logger = loggerConfiguration.CreateLogger();
+        }
     }
 }

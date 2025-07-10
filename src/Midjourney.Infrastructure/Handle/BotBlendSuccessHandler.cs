@@ -1,8 +1,7 @@
-﻿
+
 using Discord.WebSocket;
-using Midjourney.Infrastructure.LoadBalancer;
-using Midjourney.Infrastructure.Util;
 using System.Text.RegularExpressions;
+using Midjourney.Infrastructure.Services;
 
 namespace Midjourney.Infrastructure.Handle
 {

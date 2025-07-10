@@ -1,9 +1,10 @@
-﻿
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Midjourney.Base;
+using Midjourney.Base.Models;
 using Serilog;
 
-namespace Midjourney.Captcha.API
+namespace Midjourney.Captcha.API.Filters
 {
     /// <summary>
     /// 自定义逻辑异常特性，以 json 格式返回错误内容

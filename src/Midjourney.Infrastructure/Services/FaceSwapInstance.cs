@@ -1,12 +1,9 @@
 ﻿
 
-using Microsoft.Extensions.Caching.Memory;
-using Midjourney.Infrastructure.Dto;
-using Midjourney.Infrastructure.Services;
-using Midjourney.Infrastructure.Util;
 using System.Diagnostics;
+using Microsoft.Extensions.Caching.Memory;
 
-namespace Midjourney.Infrastructure.LoadBalancer
+namespace Midjourney.Infrastructure.Services
 {
     /// <summary>
     /// 换脸服务

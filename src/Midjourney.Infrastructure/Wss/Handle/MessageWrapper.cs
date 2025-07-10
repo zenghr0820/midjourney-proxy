@@ -1,8 +1,4 @@
 using System.Text.Json;
-using Midjourney.Infrastructure.Data;
-using Midjourney.Infrastructure.Dto;
-using Midjourney.Infrastructure.Util;
-using Midjourney.Infrastructure.Wss.Gateway;
 
 namespace Midjourney.Infrastructure.Wss.Handle
 {

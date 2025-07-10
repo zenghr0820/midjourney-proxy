@@ -1,6 +1,4 @@
-﻿
-
-namespace Midjourney.Infrastructure.LoadBalancer
+﻿namespace Midjourney.Infrastructure.Services
 {
     /// <summary>
     /// 最少等待空闲选择规则

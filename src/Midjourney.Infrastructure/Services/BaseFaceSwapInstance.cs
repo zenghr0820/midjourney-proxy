@@ -1,14 +1,12 @@
-﻿using Microsoft.Extensions.Caching.Memory;
-using Midjourney.Infrastructure.Services;
+using Microsoft.Extensions.Caching.Memory;
 using Newtonsoft.Json;
 using RestSharp;
 using Serilog;
 using System.Collections.Concurrent;
 
-using ILogger = Serilog.ILogger;
 using WebProxy = System.Net.WebProxy;
 
-namespace Midjourney.Infrastructure.LoadBalancer
+namespace Midjourney.Infrastructure.Services
 {
     /// <summary>
     /// 换脸服务

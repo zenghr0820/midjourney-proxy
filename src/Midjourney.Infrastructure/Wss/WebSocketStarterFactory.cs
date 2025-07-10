@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Caching.Memory;
-using Midjourney.Infrastructure.LoadBalancer;
+using Midjourney.Infrastructure.Services;
 using Midjourney.Infrastructure.Wss.Handle;
 using Serilog;
 using System.Net;
@@ -18,10 +18,10 @@ namespace Midjourney.Infrastructure.Wss
         private readonly DiscordHelper _discordHelper;
         private readonly IMemoryCache _memoryCache;
 
-        private readonly ProxyProperties _properties = GlobalConfiguration.Setting;
+        private readonly Setting _properties = GlobalConfiguration.Setting;
 
         private readonly WebProxy _webProxy;
-        private IEnumerable<MessageHandler> _messageHandlers;
+        private readonly IEnumerable<MessageHandler> _messageHandlers;
 
         /// <summary>
         /// 构造函数

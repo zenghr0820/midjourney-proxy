@@ -1,8 +1,7 @@
 ﻿
 using Microsoft.Extensions.Logging;
-using Midjourney.Infrastructure.Data;
-using Midjourney.Infrastructure.Dto;
 using Midjourney.Infrastructure.LoadBalancer;
+using Midjourney.Infrastructure.Services;
 
 namespace Midjourney.Infrastructure.Handle
 {

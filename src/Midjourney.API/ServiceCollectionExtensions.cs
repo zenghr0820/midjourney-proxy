@@ -1,9 +1,7 @@
-﻿using Midjourney.Infrastructure.Handle;
+using Midjourney.Infrastructure.Handle;
 using Midjourney.Infrastructure.Wss.Handle;
-using Midjourney.Infrastructure.Data;
 using Midjourney.Infrastructure.LoadBalancer;
 using Midjourney.Infrastructure.Services;
-using Midjourney.Infrastructure.Storage;
 using Midjourney.Infrastructure.Wss;
 using Serilog;
 
@@ -11,7 +9,7 @@ namespace Midjourney.API
 {
     public static class ServiceCollectionExtensions
     {
-        public static void AddMidjourneyServices(this IServiceCollection services, ProxyProperties config)
+        public static void AddMidjourneyServices(this IServiceCollection services, Setting config)
         {
 
             // 注册所有的处理程序

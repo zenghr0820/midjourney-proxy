@@ -3,6 +3,7 @@ using Serilog.Debugging;
 using System.Diagnostics;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Hosting.Server;
+using Serilog.Events;
 
 namespace Midjourney.API
 {
